@@ -1,0 +1,537 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<script src="../shared/file-guard.js"></script>
+<title>AIR PICTIONARY</title>
+<style>
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:#050507; color:#fff; overflow:hidden; height:100vh;
+         font-family:"Helvetica Neue", Arial, sans-serif; }
+  #stage { position:relative; width:100vw; height:100vh; }
+  #cam { display:none; }
+  #fx { position:absolute; inset:0; width:100%; height:100%;
+        object-fit:cover; transform:scaleX(-1); }
+  #top { position:absolute; left:0; right:0; top:0; padding:22px 36px 40px;
+         background:linear-gradient(to bottom, rgba(0,0,0,.9), rgba(0,0,0,0));
+         display:flex; align-items:flex-start; justify-content:space-between; }
+  #prompt { font-size:clamp(15px,1.5vw,20px); letter-spacing:.16em; opacity:.5;
+            text-transform:uppercase; }
+  #trained { font-size:12px; letter-spacing:.12em; opacity:.4; margin-top:8px;
+             text-transform:uppercase; }
+  #word { font-size:clamp(34px,5.5vw,74px); font-weight:900; letter-spacing:-.02em;
+          line-height:1; margin-top:6px; }
+  #timer { font-size:clamp(38px,6vw,84px); font-weight:900; line-height:1;
+           font-variant-numeric:tabular-nums; }
+  #guesses { position:absolute; left:36px; bottom:34px; width:min(420px,38vw); }
+  .g { margin-bottom:11px; }
+  .grow { display:flex; justify-content:space-between; align-items:baseline;
+          font-weight:800; letter-spacing:.04em; text-transform:uppercase; }
+  .gname { font-size:clamp(16px,1.9vw,26px); }
+  .gpct { font-size:clamp(12px,1.2vw,16px); opacity:.55; }
+  .bar { height:7px; background:rgba(255,255,255,.12); margin-top:5px;
+         border-radius:4px; overflow:hidden; }
+  .fill { height:100%; background:#00E5FF; width:0; transition:width .18s ease-out; }
+  .g:nth-child(1) .fill { background:#00E5FF; }
+  .g:nth-child(2) .fill { background:#7A8CA0; }
+  .g:nth-child(3) .fill { background:#55606E; }
+  .g:nth-child(1) .gname { color:#00E5FF; }
+  #banner { position:absolute; inset:0; display:none; align-items:center;
+            justify-content:center; pointer-events:none; }
+  #banner div { font-size:clamp(40px,9vw,140px); font-weight:900;
+                letter-spacing:-.03em; text-align:center; padding:0 6vw; }
+  #hint, #privacy { position:absolute; bottom:14px; font-size:12px; opacity:.35;
+                    letter-spacing:.05em; }
+  #hint { left:36px; bottom:12px; }
+  #privacy { right:36px; text-align:right; }
+  #hands { position:absolute; right:36px; bottom:44px; text-align:right;
+           font-size:13px; letter-spacing:.1em; opacity:.5; text-transform:uppercase;
+           line-height:1.8; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <video id="cam" playsinline autoplay muted></video>
+  <canvas id="fx"></canvas>
+  <div id="top">
+    <div><div id="prompt">draw this</div><div id="word">&mdash;</div>
+         <div id="trained"></div></div>
+    <div id="timer"></div>
+  </div>
+  <div id="guesses"></div>
+  <div id="hands"></div>
+  <div id="banner"><div></div></div>
+  <div id="hint">POINT draw &middot; CURL finger to lift the pen &middot; OPEN PALM rub out &middot; N new word &middot; C clear &middot; R teach it this &middot; X forget &middot; F full &middot; 1-2 demo</div>
+  <div id="privacy">nothing is recorded &middot; runs on this laptop &middot; shapes: Google Quick, Draw! dataset (CC BY 4.0)</div>
+</div>
+
+<script type="module">
+import { HandLandmarker, FilesetResolver }
+  from "../shared/vendor/vision_bundle.mjs";
+import { createClassifier } from "../shared/sketch-classifier.js";
+import { createTaskWithFallback, failureReport, showFatalOverlay, clearFatalOverlay,
+         openCamera } from "../shared/mp.js";
+
+/* ==========================================================================
+   Config
+   ========================================================================== */
+const ROUND_MS = 25000;
+const GUESS_EVERY = 6;             // classify every N frames, not every frame
+const SMOOTH = 0.35;               // base fingertip EMA; fast moves get less lag
+const PEN_UP_GRACE_MS = 260;       // a stroke survives this long without a pointing frame
+const CLASSIFY_EVERY_MS = 350;
+const PEN_DOWN_FRAMES = 2;         // frames of pointing before a stroke starts
+const MIN_HAND_SCORE = 0.75;       // handedness confidence below this = probably not a hand
+const MIN_HAND_SPAN = 0.045;       // wrist-to-knuckle in normalised units; a nose is smaller
+const MIN_SEG = 0.004;             // ignore sub-pixel wobble between samples
+
+const WIN_LINES  = ["GOT IT","YES. OBVIOUSLY.","TOO EASY"];
+const FAIL_LINES = ["NO IDEA","WE GAVE UP","THAT WAS NOT A "];
+
+/* ========================================================================== */
+const video=document.getElementById("cam"), canvas=document.getElementById("fx");
+const ctx=canvas.getContext("2d");
+const elWord=document.getElementById("word"), elTimer=document.getElementById("timer");
+const elGuesses=document.getElementById("guesses"), elBanner=document.getElementById("banner");
+const elHands=document.getElementById("hands");
+
+// the drawing lives on its own canvas so the video can redraw every frame
+const ink=document.createElement("canvas"); let inkCtx;
+
+const classifier=createClassifier();
+// stroke data is in camera space but the user SEES a mirror; recognise and
+// teach in screen space so a fish drawn facing left matches a fish facing left
+const toScreen=st=>st.map(s=>s.map(p=>({x:1-p.x,y:p.y})));
+let strokes=[], current=null, target=null, roundEnd=0, frame=0;
+let lastGuesses=[], banner=null, bannerUntil=0, solved=false;
+
+/* ==========================================================================
+   Hand shape. Finger extension is measured as distance from the wrist:
+   tip further out than the middle joint = extended. Orientation-invariant,
+   so it still works with the hand rotated or upside down.
+   ========================================================================== */
+// Finger extension from the BEND ANGLE at the middle joint, measured on the
+// 3D world landmarks (metres, camera-independent). The old version compared
+// tip-to-wrist distances on the 2D image, which collapses whenever the hand
+// tilts toward the camera - so pointing kept dropping out mid-stroke.
+const FINGERS={ index:[5,6,8], middle:[9,10,12], ring:[13,14,16], pinky:[17,18,20] };
+const OUT_DEG=45, IN_DEG=85;              // below = straight, above = curled, between = keep last
+const INDEX_STRICT_DEG=32;                // to START pointing the index must be this straight...
+const INDEX_LONGER=1.3;                   // ...and reach this much further than the curled middle finger
+
+function bendDeg(w,mcp,pip,tip){
+  const ax=w[pip].x-w[mcp].x, ay=w[pip].y-w[mcp].y, az=(w[pip].z||0)-(w[mcp].z||0);
+  const bx=w[tip].x-w[pip].x, by=w[tip].y-w[pip].y, bz=(w[tip].z||0)-(w[pip].z||0);
+  const la=Math.hypot(ax,ay,az)||1e-6, lb=Math.hypot(bx,by,bz)||1e-6;
+  const c=Math.max(-1,Math.min(1,(ax*bx+ay*by+az*bz)/(la*lb)));
+  return Math.acos(c)*180/Math.PI;
+}
+
+const gstate={};                          // per hand slot: {fs:{}, g:"idle"}
+function gesture(lm,world,slot){
+  const w=world&&world.length>=21?world:lm;
+  const st=gstate[slot]||(gstate[slot]={fs:{},g:"idle"});
+  const bends={};
+  for(const [name,[mcp,pip,tip]] of Object.entries(FINGERS)){
+    const d=bendDeg(w,mcp,pip,tip); bends[name]=d;
+    if(d<OUT_DEG) st.fs[name]="out"; else if(d>IN_DEG) st.fs[name]="in";
+    // ambiguous zone: keep the previous verdict for that finger
+    else if(!st.fs[name]) st.fs[name]="in";
+  }
+  const f=st.fs, others=[f.middle,f.ring,f.pinky];
+  const outCount=others.filter(x=>x==="out").length;
+  const inCount=others.filter(x=>x==="in").length;
+  const dw=i=>Math.hypot(w[i].x-w[0].x, w[i].y-w[0].y, (w[i].z||0)-(w[0].z||0));
+  const indexLonger=dw(8)>dw(12)*INDEX_LONGER;     // index clearly beyond the curled middle
+  let g;
+  if(f.index==="out"&&outCount===3) g="palm";
+  // KEEP pointing on the loose rule, so a stroke survives a relaxed finger...
+  else if(st.g==="point"&&f.index==="out"&&outCount<=1) g="point";
+  // ...but START pointing only on the strict one: straight index, the other
+  // three clearly curled, index reaching well past the middle knuckle
+  else if(bends.index<INDEX_STRICT_DEG&&inCount===3&&indexLonger) g="point";
+  else if(st.g==="palm"&&outCount>=2) g="palm";
+  else g="idle";
+  st.g=g;
+  return g;
+}
+
+function handSpan(lm){                       // scale reference: wrist to middle mcp
+  return Math.hypot(lm[9].x-lm[0].x, lm[9].y-lm[0].y);
+}
+
+/* ==========================================================================
+   Round handling
+   ========================================================================== */
+function refreshTrained(){
+  const n=classifier.userCount(target);
+  document.getElementById("trained").textContent =
+    n ? "taught "+n+" time"+(n>1?"s":"")+"  ·  R to add another"
+      : "R to teach it your version";
+}
+
+function newRound(){
+  strokes=[]; current=null; lastGuesses=[]; solved=false;
+  inkCtx.clearRect(0,0,ink.width,ink.height);
+  const cats=classifier.categories();
+  target=cats[(Math.random()*cats.length)|0];
+  document.getElementById("prompt").textContent="draw this  \u00b7  "+cats.length+" shapes";
+  elWord.textContent=target.toUpperCase();
+  roundEnd=performance.now()+ROUND_MS;
+  banner=null;
+  refreshTrained();
+}
+
+function clearInk(){
+  strokes=[]; current=null; lastGuesses=[];
+  renderInk();
+}
+
+function say(text,colour,now,ms=2200){
+  banner=text; elBanner.firstElementChild.style.color=colour;
+  bannerUntil=now+ms;
+}
+
+function handleKey(key,code){
+  const k=(key||"").toLowerCase();
+  if(k==="n") newRound();
+  if(k==="c") clearInk();
+  // Teach it. The built-in templates are idealised shapes; a real person's
+  // air-drawn attempt is worth far more. Ten minutes of this before the day
+  // and it gets noticeably better.
+  if(k==="r" && strokes.length){
+    const n=classifier.addTemplate(target,toScreen(smoothedStrokes()));
+    say("LEARNED "+target.toUpperCase()+" ("+n+")","#B4FF2E",performance.now(),1400);
+    refreshTrained();
+  }
+  if(k==="x"){
+    classifier.clearUserTemplates();
+    say("FORGOT EVERYTHING","#FF3DDA",performance.now(),1400);
+    refreshTrained();
+  }
+  if(k==="f") document.documentElement.requestFullscreen();
+  if(["1","2"].includes(k)&&parent!==window) parent.postMessage({demo:k},"*");
+}
+addEventListener("keydown",(e)=>handleKey(e.key,e.code));
+// The shell forwards keys here, because an un-focused iframe never gets them.
+addEventListener("message",(e)=>{
+  if(!e.data) return;
+  if(e.data.type==="key") handleKey(e.data.key,e.data.code);
+  if(e.data.type==="visibility"){
+    const p=!e.data.visible;
+    if(p!==paused){ paused=p; if(!paused) requestAnimationFrame(loop); }
+  }
+});
+
+/* ==========================================================================
+   Drawing + erasing
+   ========================================================================== */
+/* Strokes are DATA; the ink canvas is re-rendered from that data with
+   smoothing, so what you see is the tidied line, not the raw jitter.
+   The live stroke is drawn smoothed on the display canvas every frame and is
+   committed to the ink canvas on pen-up. Erasing edits the data and re-renders. */
+function penTo(x,y,width){
+  if(!current){ current=[{x,y}]; current.w=width; strokes.push(current); return; }
+  const last=current[current.length-1];
+  if(Math.hypot(x-last.x,y-last.y)<MIN_SEG) return;
+  current.push({x,y});
+}
+
+// 5-point moving average (endpoints kept), and near-closed loops are closed:
+// a circle drawn in the air almost never meets itself exactly
+function smoothPts(s){
+  if(s.length<4) return s.slice();
+  const out=[s[0]];
+  for(let i=1;i<s.length-1;i++){
+    let x=0,y=0,n=0;
+    for(let k=-2;k<=2;k++){ const j=Math.min(s.length-1,Math.max(0,i+k)); x+=s[j].x; y+=s[j].y; n++; }
+    out.push({x:x/n,y:y/n});
+  }
+  out.push(s[s.length-1]);
+  let minX=1e9,maxX=-1e9,minY=1e9,maxY=-1e9;
+  for(const p of out){ minX=Math.min(minX,p.x); maxX=Math.max(maxX,p.x); minY=Math.min(minY,p.y); maxY=Math.max(maxY,p.y); }
+  const diag=Math.hypot(maxX-minX,maxY-minY), a=out[0], b=out[out.length-1];
+  if(out.length>14 && diag>0.06 && Math.hypot(a.x-b.x,a.y-b.y)<diag*0.07) out.push({x:a.x,y:a.y});
+  return out;
+}
+
+function drawSmooth(g,s,w,W,H){
+  const p=smoothPts(s);
+  g.strokeStyle="#fff"; g.fillStyle="#fff"; g.lineWidth=w; g.lineCap="round"; g.lineJoin="round";
+  if(p.length<2){ if(p.length){ g.beginPath(); g.arc(p[0].x*W,p[0].y*H,w/2,0,Math.PI*2); g.fill(); } return; }
+  g.beginPath(); g.moveTo(p[0].x*W,p[0].y*H);
+  for(let i=1;i<p.length-1;i++){
+    const mx=(p[i].x+p[i+1].x)/2*W, my=(p[i].y+p[i+1].y)/2*H;
+    g.quadraticCurveTo(p[i].x*W,p[i].y*H,mx,my);
+  }
+  const l=p[p.length-1]; g.lineTo(l.x*W,l.y*H); g.stroke();
+}
+
+function renderInk(){
+  inkCtx.clearRect(0,0,ink.width,ink.height);
+  for(const s of strokes){ if(s===current) continue; drawSmooth(inkCtx,s,s.w||6,ink.width,ink.height); }
+}
+
+// what the recogniser sees: the smoothed strokes, in screen space
+const smoothedStrokes=()=>strokes.map(s=>smoothPts(s));
+
+function rubOut(x,y,radius){
+  const rx=radius/ink.width, ry=radius/ink.height;
+  const gone=p=>Math.hypot((p.x-x)/rx,(p.y-y)/ry)<=1;
+  const next=[];
+  for(const s of strokes){                          // split a stroke where it was erased
+    let run=null;
+    for(const p of s){
+      if(gone(p)){ run=null; continue; }
+      if(!run){ run=[]; run.w=s.w; next.push(run); }
+      run.push(p);
+    }
+  }
+  strokes=next.filter(s=>s.length>1);
+  current=null;
+  renderInk();
+}
+
+function drawHand(lm,colour,W,H){
+  const BONES=[[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],
+               [10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],
+               [18,19],[19,20],[0,17]];
+  ctx.save();
+  ctx.strokeStyle=colour; ctx.shadowColor=colour; ctx.shadowBlur=8;
+  ctx.lineWidth=2; ctx.lineCap="round";
+  ctx.beginPath();
+  for(const [a,b] of BONES){
+    ctx.moveTo(lm[a].x*W,lm[a].y*H); ctx.lineTo(lm[b].x*W,lm[b].y*H);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+/* ==========================================================================
+   Guess panel
+   ========================================================================== */
+function renderGuesses(list){
+  if(!list.length){ elGuesses.innerHTML=""; return; }
+  if(elGuesses.children.length!==3){
+    elGuesses.innerHTML="";
+    for(let i=0;i<3;i++){
+      const d=document.createElement("div"); d.className="g";
+      d.innerHTML='<div class="grow"><span class="gname"></span><span class="gpct"></span></div>'
+                 +'<div class="bar"><div class="fill"></div></div>';
+      elGuesses.appendChild(d);
+    }
+  }
+  list.slice(0,3).forEach((g,i)=>{
+    const row=elGuesses.children[i];
+    row.querySelector(".gname").textContent=g.label;
+    row.querySelector(".gpct").textContent=Math.round(g.prob*100)+"%";
+    row.querySelector(".fill").style.width=Math.round(g.prob*100)+"%";
+  });
+}
+
+/* ==========================================================================
+   Main loop
+   ========================================================================== */
+let hands, lastVideoTime=-1, activeDelegate="", detectErrors=0, startAttempts=[];
+let lastPenAt=0, lastClassifyAt=0, lastInkCount=-1, paused=false;
+window.__demoState=()=>({paused, frame});           // test hooks
+window.__gesture=gesture;
+const smoothed={};                 // per hand index, EMA of the fingertip
+
+async function boot(){
+  elWord.textContent="LOADING...";
+  let fileset;
+  try {
+    fileset = await FilesetResolver.forVisionTasks("../shared/wasm");
+  } catch (_) {
+    fileset = await FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+  }
+
+  let made;
+  try{
+    // Higher thresholds than the defaults (0.5): the hand detector will happily
+    // call a nose or a chin a low-confidence hand, and that "hand" then draws.
+    const handOpts=(path)=>({ baseOptions:{ modelAssetPath:path }, runningMode:"VIDEO", numHands:2,
+      minHandDetectionConfidence:0.7, minHandPresenceConfidence:0.7, minTrackingConfidence:0.6 });
+    // local copy first; CDN only if the local one failed to LOAD (see mood.html)
+    made=await createTaskWithFallback(HandLandmarker, fileset,
+      handOpts("../shared/hand_landmarker.task"),
+      handOpts("https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"));
+  }catch(e){
+    const r=failureReport(e);
+    showFatalOverlay(r.title, r.lines);
+    elWord.textContent="MODEL COULD NOT START";
+    console.error(e, e.attempts);
+    return;
+  }
+  hands=made.task; startAttempts=made.attempts;
+  activeDelegate=made.delegate+"/"+made.canvas;
+  if(made.delegate==="CPU") document.getElementById("privacy").textContent=
+    "nothing is recorded \u00b7 runs on this laptop \u00b7 cpu mode";
+
+  elWord.textContent="CAMERA...";
+  const elTrained=document.getElementById("trained");
+  // keeps retrying (busy camera, permission, unplugged) and explains meanwhile
+  await openCamera(video, (title, detail) => {
+    elWord.textContent=title; elTrained.textContent=detail;
+  });
+  elTrained.textContent="";
+  canvas.width=video.videoWidth || 1280;
+  canvas.height=video.videoHeight || 720;
+  ink.width=canvas.width;
+  ink.height=canvas.height;
+  inkCtx=ink.getContext("2d");
+  elWord.textContent="LOADING SHAPES...";
+  await classifier.ready;                       // real Quick, Draw! templates
+  newRound();
+  if(parent!==window) parent.postMessage({type:"ready"},"*");
+  requestAnimationFrame(loop);
+}
+
+// Release the webcam when switching away so other demos aren't blocked
+window.addEventListener("beforeunload", () => {
+  if (video && video.srcObject) {
+    try { video.srcObject.getTracks().forEach(t => t.stop()); } catch (_) {}
+  }
+});
+
+function loop(){
+  if(paused) return;                            // shell hid us; resumed by message
+  requestAnimationFrame(loop);
+  if(!hands||video.readyState<2) return;
+  if(video.currentTime===lastVideoTime) return;
+  lastVideoTime=video.currentTime;
+
+  if (video.videoWidth > 0 && (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight)) {
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ink.width = canvas.width;
+    ink.height = canvas.height;
+    if (inkCtx) inkCtx = ink.getContext("2d");
+  }
+
+  const now=performance.now(), W=canvas.width, H=canvas.height;
+  frame++;
+
+  ctx.drawImage(video,0,0,W,H);
+  ctx.fillStyle="rgba(5,5,7,.55)"; ctx.fillRect(0,0,W,H);
+
+  let res;
+  try{ res=hands.detectForVideo(video,now); }
+  catch(e){
+    detectErrors++;
+    const msg=(e&&e.message)||String(e);
+    if(detectErrors<=3) console.error("detectForVideo failed:",e);
+    if(detectErrors===3){
+      const r=failureReport(Object.assign(e,{attempts:startAttempts}));
+      showFatalOverlay("DETECTION STOPPED WORKING",
+        ["The model passed its startup test on "+activeDelegate+", then failed on live "+
+         "camera frames: <code>"+msg.slice(0,120).replace(/</g,"&lt;")+"</code>"]
+        .concat(r.lines));
+    }
+    return;
+  }
+  if(detectErrors){ detectErrors=0; clearFatalOverlay(); }   // it recovered
+  const lms=res.landmarks||[], handed=res.handednesses||res.handedness||[];
+
+  let drewThisFrame=false;
+  const status=[];
+
+  lms.forEach((lm,i)=>{
+    const hscore=(handed[i]&&handed[i][0]&&handed[i][0].score)||0;
+    if(hscore<MIN_HAND_SCORE || handSpan(lm)<MIN_HAND_SPAN){
+      status.push("IGNORED &middot; not confident it is a hand"); return;
+    }
+    const g=gesture(lm, res.worldLandmarks&&res.worldLandmarks[i], i);
+    const side=(handed[i]&&handed[i][0]&&handed[i][0].categoryName)||"?";
+    // handedness is reported for the real hand; the view is mirrored
+    const shown=side==="Left"?"RIGHT":side==="Right"?"LEFT":"?";
+    status.push(shown+" &middot; "+g.toUpperCase());
+
+    const span=handSpan(lm);
+    const colour=g==="point"?"#00E5FF":g==="palm"?"#FF3DDA":"#7A8CA0";
+    drawHand(lm,colour,W,H);
+
+    if(g==="point"){
+      const tip=lm[8];
+      const s=smoothed[i]||(smoothed[i]={x:tip.x,y:tip.y,n:0});
+      const sp=Math.hypot(tip.x-s.x,tip.y-s.y);          // fast moves: less lag
+      const al=Math.min(0.85,SMOOTH+sp*10);
+      s.x=s.x*(1-al)+tip.x*al; s.y=s.y*(1-al)+tip.y*al;
+      s.n++;
+      if(s.n>=PEN_DOWN_FRAMES){
+        penTo(s.x,s.y, Math.max(4, span*W*0.09));   // scales with hand distance
+        drewThisFrame=true;
+      }
+      ctx.save();                                    // nib
+      ctx.fillStyle="#00E5FF"; ctx.shadowColor="#00E5FF"; ctx.shadowBlur=14;
+      ctx.beginPath(); ctx.arc(s.x*W,s.y*H,Math.max(4,span*W*0.05),0,Math.PI*2);
+      ctx.fill(); ctx.restore();
+    } else {
+      if(smoothed[i]) smoothed[i].n=0;
+      if(g==="palm"){
+        const c=lm[9], r=Math.max(24,span*W*0.75);
+        rubOut(c.x,c.y,r);
+        ctx.save();
+        ctx.strokeStyle="#FF3DDA"; ctx.lineWidth=2; ctx.setLineDash([7,7]);
+        ctx.beginPath(); ctx.arc(c.x*W,c.y*H,r,0,Math.PI*2); ctx.stroke();
+        ctx.restore();
+      }
+    }
+  });
+
+  // Lift the pen only after a short grace period: one missed frame of
+  // pointing used to chop a stroke in two.
+  if(drewThisFrame) lastPenAt=now;
+  else if(current && now-lastPenAt>PEN_UP_GRACE_MS){ current=null; renderInk(); }  // pen up: commit
+  if(!lms.length) status.push("SHOW A HAND");
+  elHands.innerHTML=status.join("<br>");
+
+  ctx.drawImage(ink,0,0);
+  if(current) drawSmooth(ctx,current,current.w||6,W,H);   // the live stroke, smoothed
+
+  // --- guessing --------------------------------------------------------
+  const inkCount=strokes.reduce((a,s)=>a+s.length,0);
+  if(strokes.length && now-lastClassifyAt>CLASSIFY_EVERY_MS && inkCount!==lastInkCount){
+    lastClassifyAt=now; lastInkCount=inkCount;
+    const g=classifier.classify(toScreen(smoothedStrokes()));
+    if(g.length) lastGuesses=g;
+    if(!solved && g.length && g[0].label===target && g[0].prob>0.30){
+      solved=true;
+      say(WIN_LINES[(Math.random()*WIN_LINES.length)|0],"#B4FF2E",now);
+      roundEnd=Math.min(roundEnd,now+1800);
+    }
+  }
+  renderGuesses(lastGuesses);
+
+  // --- timer -----------------------------------------------------------
+  const left=Math.max(0,roundEnd-now);
+  elTimer.textContent=(left/1000).toFixed(1);
+  elTimer.style.color=left<5000?"#FF3DDA":"#fff";
+  if(left<=0){
+    if(!solved){
+      const l=FAIL_LINES[(Math.random()*FAIL_LINES.length)|0];
+      say(l.endsWith(" ")?l+target.toUpperCase():l,"#FF3DDA",now,1600);
+    }
+    setTimeout(newRound,900);
+    roundEnd=now+1e9;                              // stop retriggering
+  }
+
+  if(banner&&now<bannerUntil){
+    elBanner.style.display="flex";
+    elBanner.firstElementChild.textContent=banner;
+  } else { elBanner.style.display="none"; banner=null; }
+}
+
+boot().catch(err=>{
+  const msg=(err&&err.message)||String(err);
+  elWord.textContent = /webgl|kGpuService|StartGraph/i.test(msg)
+    ? "GRAPHICS UNAVAILABLE" : "ERROR: "+msg;
+  document.getElementById("trained").textContent = /webgl|kGpuService|StartGraph/i.test(msg)
+    ? "turn on hardware acceleration in your browser, then reload" : "";
+  console.error(err);
+});
+</script>
+</body>
+</html>

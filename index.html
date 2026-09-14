@@ -1,0 +1,130 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<script src="shared/file-guard.js"></script>
+<title>AI SOCIETY - BUNFIGHT</title>
+<style>
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html, body { height:100%; background:#050507; overflow:hidden; }
+  .frame { position:absolute; inset:0; width:100vw; height:100vh; border:0; display:none; }
+  .frame.on { display:block; }
+  #switcher {
+    position:fixed; left:50%; bottom:8px; transform:translateX(-50%);
+    display:flex; gap:6px; z-index:10; font-family:"Helvetica Neue",Arial,sans-serif;
+    opacity:.25; transition:opacity .2s;
+  }
+  #switcher:hover { opacity:1; }
+  .chip { font-size:11px; letter-spacing:.1em; font-weight:700; color:#fff;
+          background:rgba(255,255,255,.1); padding:4px 10px; border-radius:2px;
+          cursor:pointer; text-transform:uppercase; }
+  .chip.on { background:#00E5FF; color:#000; }
+  .chip.warm::after { content:" \25CF"; color:#B4FF2E; }
+</style>
+</head>
+<body>
+<div id="switcher"></div>
+
+<script>
+/* One shell, BOTH demos kept alive.
+   Switching used to swap one iframe's src, which re-downloaded the model,
+   rebuilt the MediaPipe graph and re-opened the camera every time - several
+   seconds of black screen at a stall. Now each demo gets its own iframe: the
+   first loads immediately, the second is warmed up in the background once the
+   first says it is ready, and switching just toggles which one is visible.
+   The hidden demo is told to pause its loop (no detection, no CPU) and keeps
+   its camera stream, so switching back is instant. */
+const DEMOS = [
+  { key:"1", name:"Mood",       src:"demos/mood.html" },
+  { key:"2", name:"Pictionary", src:"demos/pictionary.html" },
+];
+const WARMUP_FALLBACK_MS = 9000;   // warm the second demo even if the first never says ready
+
+const bar = document.getElementById("switcher");
+const frames = {};                 // key -> iframe
+let currentKey = null;
+
+function ensureFrame(key) {
+  if (frames[key]) return frames[key];
+  const d = DEMOS.find(x => x.key === key);
+  const f = document.createElement("iframe");
+  f.className = "frame";
+  f.setAttribute("allow", "camera; microphone; fullscreen");
+  f.dataset.key = key;
+  f.src = d.src;
+  document.body.insertBefore(f, bar);
+  frames[key] = f;
+  return f;
+}
+
+function tell(f, visible) {
+  try { f.contentWindow.postMessage({ type: "visibility", visible }, "*"); } catch (e) {}
+}
+
+function go(key) {
+  const d = DEMOS.find(x => x.key === key);
+  if (!d || key === currentKey) return;
+  currentKey = key;
+  const f = ensureFrame(key);
+  for (const k in frames) {
+    const on = k === key;
+    frames[k].classList.toggle("on", on);
+    tell(frames[k], on);
+  }
+  try { f.contentWindow.focus(); } catch (e) {}
+  f.addEventListener("load", () => { try { f.contentWindow.focus(); } catch (e) {} }, { once: true });
+  for (const c of bar.children) c.classList.toggle("on", c.dataset.key === key);
+  try { localStorage.setItem("lastDemo", key); } catch (e) {}
+}
+
+// warm up every demo that is not loaded yet, one at a time
+let warming = false;
+function warmNext() {
+  if (warming) return;
+  const next = DEMOS.find(d => !frames[d.key]);
+  if (!next) return;
+  warming = true;
+  const f = ensureFrame(next.key);
+  tell(f, false);
+  f.addEventListener("load", () => tell(f, false), { once: true });
+}
+
+for (const d of DEMOS) {
+  const c = document.createElement("div");
+  c.className = "chip"; c.dataset.key = d.key;
+  c.textContent = d.key + " " + d.name;
+  c.onclick = () => go(d.key);
+  bar.appendChild(c);
+}
+
+addEventListener("message", (e) => {
+  if (!e.data) return;
+  if (e.data.demo) go(String(e.data.demo));
+  if (e.data.type === "ready") {
+    // mark the chip of whichever frame sent it, then warm the next demo
+    for (const k in frames) if (frames[k].contentWindow === e.source) {
+      const chip = [...bar.children].find(c => c.dataset.key === k);
+      if (chip) chip.classList.add("warm");
+    }
+    warming = false;
+    warmNext();
+  }
+});
+
+// Keys must work wherever focus happens to be: forward anything we do not
+// handle to the ACTIVE demo, which cannot hear them unless it has focus.
+addEventListener("keydown", (e) => {
+  if (DEMOS.some(d => d.key === e.key)) { go(e.key); return; }
+  if (e.key.toLowerCase() === "f") { document.documentElement.requestFullscreen(); return; }
+  const f = frames[currentKey];
+  if (f) try { f.contentWindow.postMessage({ type: "key", key: e.key, code: e.code }, "*"); } catch (err) {}
+});
+addEventListener("click", () => { const f = frames[currentKey]; if (f) try { f.contentWindow.focus(); } catch (e) {} });
+
+let start = "1";
+try { start = localStorage.getItem("lastDemo") || "1"; } catch (e) {}
+go(start);
+setTimeout(() => { warming = false; warmNext(); }, WARMUP_FALLBACK_MS);
+</script>
+</body>
+</html>

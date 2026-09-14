@@ -1,0 +1,105 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8">
+<script src="file-guard.js"></script><title>tongue test</title>
+<style>
+ body{background:#111;color:#eee;font-family:ui-monospace,Consolas,monospace;padding:16px}
+ canvas{border:1px solid #444;margin-right:12px;image-rendering:pixelated}
+ #out{margin-top:14px;white-space:pre;font-size:13px;line-height:1.6}
+ .ok{color:#4f4} .bad{color:#f55}
+</style>
+</head>
+<body>
+<canvas id="c" width="360" height="300"></canvas>
+<canvas id="c2" width="360" height="300"></canvas>
+<canvas id="c3" width="360" height="300"></canvas>
+<div id="out">running...</div>
+
+<script type="module">
+import { detectTongue, sampleSkin } from "./tongue.js";
+
+const RING = {
+  lipsOuter:[61,146,91,181,84,17,314,405,321,375,291,409,270,269,267,0,37,39,40,185],
+  lipsInner:[78,95,88,178,87,14,317,402,318,324,308,415,310,311,312,13,82,81,80,191],
+};
+const SKIN_PTS=[50,280,234,454,118,347];
+const MARKS={chin:152};
+const W=360,H=300;
+
+// Build a synthetic face: skin field, lips, dark cavity, and (optionally)
+// a pink tongue lobe that pokes out of the mouth and over the lower lip.
+function paint(ctx, mode){                       // "tongue" | "open" | "closed"
+  ctx.fillStyle="rgb(208,168,148)"; ctx.fillRect(0,0,W,H);           // skin
+  ctx.fillStyle="rgb(176,104,104)";                                   // lips (redder!)
+  ctx.beginPath(); ctx.ellipse(180,150,90,52,0,0,Math.PI*2); ctx.fill();
+  if(mode!=="closed"){
+    ctx.fillStyle="rgb(38,18,18)";                                    // cavity
+    ctx.beginPath(); ctx.ellipse(180,150,66,34,0,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle="rgb(238,236,230)";                                 // teeth
+    ctx.fillRect(120,120,120,12);
+  }
+  if(mode==="tongue"){
+    ctx.fillStyle="rgb(226,116,128)";                                 // tongue
+    ctx.beginPath(); ctx.ellipse(180,168,44,42,0,0,Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(180,226,30,32,0,0,Math.PI*2); ctx.fill(); // hanging below the lip
+  }
+}
+
+// normalised landmark points for the two lip rings + chin + cheeks
+function makePts(innerRy){
+  const pts=[];
+  const put=(i,x,y)=>{ pts[i]={x:x/W,y:y/H,z:0}; };
+  const ell=(idx,rx,ry)=>idx.forEach((id,k)=>{
+    const a=(k/idx.length)*Math.PI*2;
+    put(id,180+Math.cos(a)*rx,150+Math.sin(a)*ry);
+  });
+  ell(RING.lipsOuter,90,52);
+  ell(RING.lipsInner,66,innerRy);
+  put(152,180,290);                       // chin, below everything
+  for(const i of SKIN_PTS) put(i,40,40);  // cheek samples: clean skin
+  return pts;
+}
+
+const out=[];
+function run(label, mode, canvas){
+  const ctx=canvas.getContext("2d",{willReadFrequently:true});
+  paint(ctx,mode);
+  const pts=makePts(mode==="closed"?3:34);      // closed lips: the inner ring collapses
+  const skin=sampleSkin(ctx,pts,SKIN_PTS,W,H);
+  const r=detectTongue(ctx,pts,skin,RING,MARKS,W,H,false);
+  out.push(label+":");
+  out.push("  skin redness   "+(skin?skin.redness.toFixed(3):"null"));
+  out.push("  aperture frac  "+(r?r.apFrac.toFixed(3):"-"));
+  out.push("  below-lip frac "+(r?r.belFrac.toFixed(3):"-"));
+  out.push("  mouth open     "+(r?r.mouthOpen+" (gap "+(r.gap||0).toFixed(2)+")":"-"));
+  out.push("  seeds/region   "+(r?(r.seeds+" / "+(r.region||0)):"-"));
+  out.push("  found          "+(r?r.found:"-"));
+  out.push("  tongue parts   "+(r&&r.polys?r.polys.length:0));
+  if(r&&r.polys) for(const ring of r.polys){     // draw what it traced
+    ctx.strokeStyle="#00ff88"; ctx.lineWidth=2; ctx.beginPath();
+    ctx.moveTo(ring[0].x,ring[0].y);
+    for(let i=1;i<ring.length;i++) ctx.lineTo(ring[i].x,ring[i].y);
+    ctx.closePath(); ctx.stroke();
+  }
+  return r;
+}
+
+const withT  = run("TONGUE OUT (left canvas)", "tongue", document.getElementById("c"));
+const noT    = run("MOUTH OPEN, NO TONGUE (middle)", "open", document.getElementById("c2"));
+const closed = run("MOUTH CLOSED, RED LIPS (right) - the lip-as-tongue case", "closed", document.getElementById("c3"));
+
+const pass1 = !!(withT && withT.found && withT.polys.length > 0);
+const pass3 = !!(withT && withT.polys.length === 1 && withT.reachesBelowLip);   // one region, seam to chin
+const pass2 = !!(noT && !noT.found);
+const pass4 = !!(closed && !closed.found && !closed.mouthOpen);
+out.push("");
+out.push((pass1?"PASS":"FAIL")+"  detects + outlines a tongue");
+out.push((pass2?"PASS":"FAIL")+"  does NOT fire on an open mouth with lips + teeth");
+out.push((pass3?"PASS":"FAIL")+"  one region grown from the seam that reaches below the lip");
+out.push((pass4?"PASS":"FAIL")+"  closed red lips are NOT a tongue");
+document.getElementById("out").innerHTML =
+  out.join("\n").replace(/PASS/g,'<span class="ok">PASS</span>')
+                .replace(/FAIL/g,'<span class="bad">FAIL</span>');
+</script>
+</body>
+</html>

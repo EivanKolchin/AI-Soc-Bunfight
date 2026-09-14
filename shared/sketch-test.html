@@ -1,0 +1,97 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<script src="file-guard.js"></script><title>sketch recogniser test</title>
+<style>
+ body{background:#111;color:#eee;font-family:ui-monospace,Consolas,monospace;padding:16px}
+ #out div{white-space:pre-wrap;font-size:13px;line-height:1.55}
+ .ok{color:#4f4}.bad{color:#f55}.warn{color:#fb4}.dim{opacity:.55}.head{margin-top:12px;color:#8cf}
+</style></head>
+<body>
+<div id="out"><div class="dim">sketch recogniser test - held-out Quick, Draw! drawings</div></div>
+
+<script type="module">
+import { createClassifier, quickdrawToStrokes, TEMPLATE_SHAPES } from "./sketch-classifier.js";
+
+const out=document.getElementById("out");
+const log=(t,cls)=>{ const d=document.createElement("div"); if(cls) d.className=cls; d.textContent=t; out.appendChild(d); return d; };
+const results=[];
+const check=(name,pass)=>{ results.push([name,pass]); log((pass?"PASS  ":"FAIL  ")+name, pass?"ok":"bad"); };
+
+async function main(){
+  if(window.__FILE_PROTOCOL) return;
+
+  log("1. loading templates","head");
+  const c=createClassifier();
+  const t0=performance.now();
+  await c.ready;
+  const st=c.stats();
+  log("   templates "+st.templates+"  (quickdraw "+st.quickdraw+", user "+st.user+")  categories "+st.categories+
+      "  loaded in "+Math.round(performance.now()-t0)+"ms"+(st.error?"   ERROR: "+st.error:""));
+  check("Quick, Draw! templates loaded", st.quickdraw>500);
+
+  log("2. held-out accuracy (drawings the recogniser has never seen)","head");
+  let test=null;
+  try{ const r=await fetch("./quickdraw-test.json"); if(!r.ok) throw new Error("HTTP "+r.status); test=(await r.json()).categories; }
+  catch(e){ log("   no test set: "+e.message,"bad"); }
+
+  let top1=0, top3=0, total=0, msSum=0;
+  const perCat=[], confusions={};
+  if(test){
+    const active=new Set(c.categories());
+    const skipped=Object.keys(test).filter(k=>!active.has(k));
+    log("   evaluating "+active.size+" active shapes; "+skipped.length+" downloaded shapes are switched off: "+skipped.join(", "),"dim");
+    for(const [label,drawings] of Object.entries(test)){
+      if(!active.has(label)) continue;
+      let h1=0,h3=0;
+      for(const d of drawings){
+        const strokes=quickdrawToStrokes(d);
+        const a=performance.now();
+        const g=c.classify(strokes);
+        msSum+=performance.now()-a;
+        const rank=g.findIndex(x=>x.label===label);
+        if(rank===0) h1++; if(rank>=0&&rank<3) h3++;
+        if(rank!==0&&g[0]){ const k=label+" -> "+g[0].label; confusions[k]=(confusions[k]||0)+1; }
+        total++;
+      }
+      top1+=h1; top3+=h3; perCat.push([label,h1,h3,drawings.length]);
+    }
+    perCat.sort((a,b)=>(a[1]/a[3])-(b[1]/b[3]));
+    for(const [l,h1,h3,n] of perCat)
+      log("   "+l.padEnd(12)+" top1 "+String(h1).padStart(2)+"/"+n+"   top3 "+String(h3).padStart(2)+"/"+n,
+          h1/n<0.3?"warn":"");
+    const p1=top1/total, p3=top3/total, cats=active.size;
+    log("");
+    log("   OVERALL  top-1 "+(p1*100).toFixed(0)+"%   top-3 "+(p3*100).toFixed(0)+"%   over "+total+
+        " drawings, "+cats+" categories   (chance "+(100/cats).toFixed(0)+"% / "+(300/cats).toFixed(0)+"%)");
+    log("   classify time: avg "+(msSum/total).toFixed(1)+"ms");
+    const worst=Object.entries(confusions).sort((a,b)=>b[1]-a[1]).slice(0,8);
+    log("   commonest confusions: "+worst.map(([k,v])=>k+" x"+v).join(", "),"dim");
+    document.title="EVAL top1="+(p1*100).toFixed(0)+" top3="+(p3*100).toFixed(0)+" ms="+(msSum/total).toFixed(1);
+    check("top-1 well above chance on unseen human drawings (>35%)", p1>0.35);
+    check("top-3 usable for a live 3-guess panel (>60%)", p3>0.60);
+    check("classification is fast enough to run 3x per second (<120ms)", msSum/total<120);
+  }
+
+  log("3. interface + learnability","head");
+  const g0=c.classify(TEMPLATE_SHAPES.star[0]);
+  check("output sorted, normalised", g0.length>10 && Math.abs(g0.reduce((a,b)=>a+b.prob,0)-1)<0.01
+        && g0.every((v,i)=>i===0||g0[i-1].prob>=v.prob));
+  check("empty input does not crash", c.classify([]).length===0 && c.classify([[]]).length===0);
+  const spiral=[(()=>{ const s=[]; for(let i=0;i<=120;i++){ const t=i/120,a=t*Math.PI*6,r=0.05+t*0.42;
+    s.push({x:0.5+Math.cos(a)*r,y:0.5+Math.sin(a)*r}); } return s; })()];
+  const before=c.classify(spiral).findIndex(x=>x.label==="house");
+  c.addTemplate("house",spiral);
+  const after=c.classify(spiral).findIndex(x=>x.label==="house");
+  c.clearUserTemplates();
+  const afterClear=c.classify(spiral).findIndex(x=>x.label==="house");
+  log("   spiral claimed to be a house: rank "+before+" -> "+after+" after teaching, "+afterClear+" after clearing","dim");
+  check("teaching a shape makes it rank first", after===0 && before>0);
+  check("clearing undoes the teaching", afterClear===before);
+
+  const fails=results.filter(r=>!r[1]).length;
+  log("");
+  log(fails?("RESULT: "+fails+" check(s) failed"):"RESULT: all checks pass", fails?"bad":"ok");
+}
+main().catch(e=>log("TEST CRASHED: "+((e&&e.message)||e),"bad"));
+</script>
+</body></html>

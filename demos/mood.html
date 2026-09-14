@@ -1,0 +1,911 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<script src="../shared/file-guard.js"></script>
+<title>MOOD DETECTOR</title>
+<style>
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:#050507; color:#fff; overflow:hidden; height:100vh;
+         font-family:"Helvetica Neue", Arial, sans-serif; }
+  #stage { position:relative; width:100vw; height:100vh; }
+  #cam { display:none; }
+  #fx { position:absolute; inset:0; width:100%; height:100%;
+        object-fit:cover; transform:scaleX(-1); }
+  #labels { position:absolute; inset:0; pointer-events:none; }
+  .tag { position:absolute; transform:translate(-50%,-100%); color:#000;
+         font-weight:900; font-size:20px; letter-spacing:.08em;
+         padding:3px 11px; white-space:nowrap; border-radius:2px; }
+  #hud { position:absolute; left:0; right:0; bottom:0; padding:24px 40px 30px;
+         background:linear-gradient(to top, rgba(0,0,0,.93), rgba(0,0,0,0));
+         text-align:center; }
+  #pct { font-size:clamp(54px,10vw,138px); font-weight:900; line-height:.9;
+         letter-spacing:-.03em; }
+  #verdict { font-size:clamp(20px,3.3vw,48px); font-weight:800;
+             letter-spacing:.02em; margin-top:8px; text-transform:uppercase; }
+  #sub { font-size:clamp(11px,1.15vw,16px); font-weight:600; letter-spacing:.14em;
+         margin-top:10px; opacity:.5; text-transform:uppercase; min-height:1.2em; }
+  #hint, #privacy { position:absolute; top:14px; font-size:12px; opacity:.35;
+                    letter-spacing:.05em; }
+  #hint { left:20px; } #privacy { right:20px; text-align:right; }
+  #debug { position:absolute; top:40px; left:20px; display:none; z-index:30;
+           border:1px solid rgba(255,255,255,.25); min-width:280px;
+           font-family:ui-monospace,Consolas,monospace; font-size:12px;
+           line-height:1.5; background:rgba(0,0,0,.72); padding:10px 14px;
+           border-radius:4px; white-space:pre; }
+  #mediabox { position:absolute; right:26px; bottom:200px; width:300px;
+              border:3px solid #fff; border-radius:4px; overflow:hidden;
+              display:none; background:#000; }
+  #mediabox img, #mediabox video { display:block; width:100%; }
+  body.truth #pct { color:#fff !important; font-size:clamp(40px,7vw,96px); }
+  body.truth #sub { opacity:.85; color:#FF2D6F; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <video id="cam" playsinline autoplay muted></video>
+  <canvas id="fx"></canvas>
+  <div id="labels"></div>
+  <div id="mediabox"><img id="mediaimg" alt=""><video id="mediavid" autoplay muted loop playsinline></video></div>
+  <div id="hint">F full &middot; SPACE recalibrate &middot; V truth &middot; T tongue &middot; D debug &middot; 1-2 switch demo</div>
+  <div id="privacy">nothing is recorded &middot; runs on this laptop</div>
+  <div id="debug"></div>
+  <div id="hud">
+    <div id="pct">--%</div>
+    <div id="verdict">LOADING&hellip;</div>
+    <div id="sub"></div>
+  </div>
+</div>
+
+<script type="module">
+import { FaceLandmarker, FilesetResolver }
+  from "../shared/vendor/vision_bundle.mjs";
+import { TONGUE, sampleSkin, detectTongue } from "../shared/tongue.js";
+import { createTaskWithFallback, failureReport, showFatalOverlay, clearFatalOverlay,
+         openCamera } from "../shared/mp.js";
+
+/* ==========================================================================
+   1. THE WRITING - edit freely, this is the whole joke
+   ========================================================================== */
+const VERDICTS = {
+  // --- silly faces --------------------------------------------------------
+  TONGUE:      ["DEEPLY UNSERIOUS","TONGUE OUT. WE LOGGED IT.","MATURE."],
+  DUCK_FACE:   ["DUCK FACE. IN THIS ECONOMY.","2014 CALLED","POUTING FOR AN AUDIENCE OF ONE"],
+  KISS:        ["NOT KISSING THE LAPTOP","PUCKERED UP AT A MACHINE","ABSOLUTELY NOT"],
+  WINK:        ["WINKING AT A COMPUTER","THAT WINK WAS NOT EARNED","SMOOTH. TO NOBODY."],
+  CROSS_EYED:  ["EYES CONVERGING. WORRYING.","CROSS-EYED ON PURPOSE, WE HOPE"],
+  PUFFERFISH:  ["CHEEKS FULLY DEPLOYED","HOLDING IN A SCREAM","PUFFERFISH MODE"],
+  BIG_GRIN:    ["ALL TEETH, NO WARMTH","MAXIMUM TEETH DETECTED"],
+  YAWN:        ["YAWNING AT US. RUDE.","WE ARE BORING YOU"],
+  SMOULDER:    ["ATTEMPTING TO BE MYSTERIOUS","THE SMOULDER IS NOT WORKING"],
+  SIDE_EYE:    ["SIDE EYE DETECTED","LOOKING AT SOMETHING ELSE. WE SAW."],
+  MEH:         ["MEH","ACTIVELY INDIFFERENT"],
+  LIP_BITE:    ["BITING YOUR LIP AT A LAPTOP","CALM DOWN"],
+  EYE_ROLL:    ["EYES TO THE CEILING","SEEKING DIVINE INTERVENTION","WE SAW THAT"],
+  HEAD_TILT:   ["TILTING LIKE A CONFUSED DOG","HEAD AT AN ANGLE. WHY."],
+  LAUGHING:    ["ACTUALLY LAUGHING","EYES SHUT, FULL COMMITMENT","THAT ONE WAS REAL"],
+  // --- real emotions ------------------------------------------------------
+  DELIGHTED:   ["GENUINELY HAPPY. THE EYES CONFIRM IT.","DUCHENNE SMILE. WE BELIEVE YOU.",
+                "ACTUALLY PLEASED, WHICH IS RARE HERE"],
+  FAKE_SMILE:  ["THAT SMILE DOES NOT REACH THE EYES","POLITE. NOT SINCERE.",
+                "CUSTOMER SERVICE SMILE","WILL JOIN SIX SOCIETIES. WILL ATTEND NONE."],
+  SMIRK:       ["SMIRKING. UNEARNED.","ONE CORNER UP. WE NOTICED."],
+  SHOCKED:     ["JUST SAW THE RENT PRICES","ALARMED, AND RIGHTLY SO",
+                "SOMEONE SAID THE WORD DEADLINE"],
+  TERRIFIED:   ["SOMEONE MENTIONED GROUP PROJECTS","GENUINE FEAR RESPONSE"],
+  FURIOUS:     ["SEETHING","STILL THINKING ABOUT AN EMAIL FROM 2023",
+                "SOMEONE TOOK YOUR SEAT IN THE LIBRARY"],
+  DISGUSTED:   ["REPULSED","YOU HAVE SEEN THE FREE PIZZA QUEUE"],
+  SAD:         ["INNER BROW RAISED. THAT ONE IS REAL.","SOMETHING HAPPENED. WE WILL NOT ASK."],
+  SKEPTICAL:   ["ONE EYEBROW UP. CLASSIC.","NOT BUYING IT","OPENLY DOUBTS THIS SOFTWARE"],
+  SUSPICIOUS:  ["DEEPLY SUSPICIOUS","DOES NOT TRUST THIS LAPTOP. CORRECT."],
+  CONTEMPT:    ["UNIMPRESSED","JUDGING YOU SILENTLY","THAT IS CONTEMPT. WE CAN ALL SEE IT."],
+  CONFUSED:    ["VISIBLY LOST","NO IDEA WHAT IS HAPPENING"],
+  CRINGE:      ["CRINGING","THAT HURT TO WATCH, APPARENTLY"],
+  GRIMACE:     ["GRIMACING","SOMETHING IS WRONG AND YOU WILL NOT SAY WHAT"],
+  DETERMINED:  ["JAW SET. LOCKED IN.","TAKING THIS FAR TOO SERIOUSLY"],
+  SHOUTING:    ["PLEASE STOP SHOUTING AT THE LAPTOP","VOLUME UNNECESSARY"],
+  THINKING:    ["THINKING. VISIBLY. LOUDLY.","BUFFERING"],
+  AVOIDANT:    ["AVOIDING EYE CONTACT WITH A MACHINE","LOOKING ANYWHERE ELSE"],
+  NERVOUS:     ["BLINKING FAR TOO MUCH","VISIBLY NERVOUS","CALM DOWN, IT IS A LAPTOP"],
+  STARING:     ["YOU HAVE NOT BLINKED IN A WHILE","UNBLINKING. UNSETTLING.",
+                "PLEASE BLINK"],
+  BORED:       ["BORED OF US ALREADY","EYES DRIFTING DOWNWARD"],
+  TIRED:       ["RUNNING ON THREE HOURS OF SLEEP","STRUCTURALLY EXHAUSTED","9AM LECTURE ENERGY"],
+  DEAD_INSIDE: ["NOTHING FOR EIGHT SECONDS STRAIGHT","DEAD BEHIND THE EYES",
+                "WE HAVE NEVER SEEN A FACE DO SO LITTLE"],
+  SILLY:       ["PULLING A FACE. NOTED.","THAT IS NOT AN EMOTION, THAT IS A STUNT",
+                "SEVERAL THINGS AT ONCE. NONE OF THEM DIGNIFIED."],
+  DEADPAN:     ["GIVING NOTHING AWAY","EMOTIONALLY UNREADABLE. SUSPICIOUS.",
+                "NO DISCERNIBLE PERSONALITY DETECTED",
+                "BLANK. WE ARE 91% SURE THIS IS A CRY FOR HELP."],
+};
+
+// Strictly one word - the tag floating above the head.
+const WORD = {
+  TONGUE:"UNSERIOUS", DUCK_FACE:"DUCKFACE", KISS:"KISSY", WINK:"WINKING",
+  CROSS_EYED:"CROSS-EYED", PUFFERFISH:"PUFFERFISH", BIG_GRIN:"TEETH", YAWN:"YAWNING",
+  SMOULDER:"SMOULDERING", SIDE_EYE:"SIDE-EYE", MEH:"MEH", LIP_BITE:"LIP-BITING",
+  EYE_ROLL:"EYE-ROLLING", HEAD_TILT:"TILTING", LAUGHING:"LAUGHING",
+  DELIGHTED:"HAPPY", FAKE_SMILE:"FAKE", SMIRK:"SMIRKING", SHOCKED:"SHOCKED",
+  TERRIFIED:"TERRIFIED", FURIOUS:"FURIOUS", DISGUSTED:"DISGUSTED", SAD:"SAD",
+  SKEPTICAL:"SKEPTICAL", SUSPICIOUS:"SUSPICIOUS", CONTEMPT:"UNIMPRESSED",
+  CONFUSED:"CONFUSED", CRINGE:"CRINGING", GRIMACE:"GRIMACING", DETERMINED:"DETERMINED",
+  SHOUTING:"SHOUTING", THINKING:"THINKING", AVOIDANT:"AVOIDANT", NERVOUS:"NERVOUS",
+  STARING:"UNBLINKING", BORED:"BORED", TIRED:"EXHAUSTED", DEAD_INSIDE:"VOID",
+  DEADPAN:"NATURAL", SILLY:"SILLY",
+};
+
+const EVIDENCE = {
+  DELIGHTED:"eye crinkle present (au6) - genuine smile",
+  FAKE_SMILE:"mouth only, no eye crinkle (au6) - polite, not felt",
+  LAUGHING:"smile + both eyes shut - the real thing",
+  SAD:"inner brow raise (au1) - hard to fake",
+  FURIOUS:"brow lowered (au4)",
+  DISGUSTED:"nose wrinkle (au9) + upper lip raise (au10)",
+  SKEPTICAL:"asymmetric brow raise",
+  CONTEMPT:"one-sided mouth corner (au14)",
+  SMIRK:"one-sided mouth corner, raised",
+  SHOCKED:"jaw drop + brow raise",
+  TERRIFIED:"upper lid raise (au5) + lip stretch (au20)",
+  DETERMINED:"brow lowered + lips pressed (au24)",
+  TONGUE:"colour vs your own skin, then largest blob, then contour",
+  WINK:"one eye shut, one open - measured geometrically",
+  CROSS_EYED:"iris positions converging",
+  HEAD_TILT:"roll angle between the eye corners",
+  NERVOUS:"blink rate over the last 10 seconds",
+  STARING:"blink rate over the last 10 seconds",
+  DUCK_FACE:"lip pucker without funnel",
+  KISS:"lip pucker + funnel",
+  DEAD_INSIDE:"no state change for eight seconds",
+  SILLY:"two or more exaggerated features at once",
+  TIRED:"eyelids lower than your own calibrated resting eyes",
+};
+
+// Drop .webm / .mp4 in ../media/mood/ and list them here. Empty = never shows.
+const MEDIA_LIBRARY = {
+  // FAKE_SMILE: ["../media/mood/fake1.webm"],
+  // TONGUE:     ["../media/mood/tongue1.webm"],
+};
+const MEDIA_HOLD_MS = 1500;    // must sustain the emotion this long to fire
+
+// Live heckling while it learns your resting face. Keyed by whichever channel
+// is misbehaving right now, so the nag is specific to what you are doing.
+const CALIB_NAG = {
+  smile:["STOP SMILING","WIPE THAT OFF YOUR FACE","NEUTRAL. NOT PLEASED."],
+  cheekSquint:["JUST YOUR RESTING FACE"],
+  jaw:["CLOSE YOUR MOUTH"],
+  browOuterUp:["STOP RAISING YOUR EYEBROWS"],
+  browInnerUp:["RELAX YOUR FOREHEAD"],
+  browDown:["STOP FROWNING"],
+  browAsym:["BOTH EYEBROWS. TOGETHER."],
+  squint:["OPEN YOUR EYES PROPERLY"],
+  eyeWide:["STOP STARING LIKE THAT"],
+  pucker:["STOP DOING THAT WITH YOUR MOUTH"],
+  funnel:["STOP DOING THAT WITH YOUR MOUTH"],
+  cheekPuff:["LET THE AIR OUT"],
+  mouthAsym:["BOTH SIDES OF YOUR FACE. PLEASE."],
+  mouthSide:["MOUTH IN THE MIDDLE, PLEASE"],
+  mouthShrug:["STOP PULLING THAT FACE"],
+  stretch:["UNCLENCH"], press:["UNCLENCH YOUR JAW"],
+  sneer:["STOP SNEERING"], upperLipUp:["STOP SNARLING"],
+  frown:["STOP FROWNING"], rollLower:["STOP BITING YOUR LIP"],
+  lookDown:["EYES UP HERE"],
+};
+// Escalates the longer they fidget.
+const CALIB_MOVE = ["HOLD STILL","STILL MOVING","WE HAVE ALL DAY",
+                    "SERIOUSLY. HOLD STILL.","THIS IS EMBARRASSING NOW"];
+
+const CALIB_ROASTS = [
+  "YOU COULD NOT HOLD STILL FOR ONE SECOND",
+  "WE ASKED FOR NEUTRAL. THAT WAS NOT NEUTRAL.",
+  "TOO MUCH FACE. STARTING ANYWAY.",
+  "CALIBRATION FAILED. YOU ARE THE PROBLEM.",
+];
+
+const PALETTE = ["#00E5FF","#FF3DDA","#B4FF2E","#FF8A1F","#FFE600","#9D7BFF"];
+
+/* ==========================================================================
+   2. Landmarks - features only, no face outline
+   ========================================================================== */
+const RING = {
+  lipsOuter:[61,146,91,181,84,17,314,405,321,375,291,409,270,269,267,0,37,39,40,185],
+  lipsInner:[78,95,88,178,87,14,317,402,318,324,308,415,310,311,312,13,82,81,80,191],
+  eyeA:[33,7,163,144,145,153,154,155,133,173,157,158,159,160,161,246],
+  eyeB:[263,249,390,373,374,380,381,382,362,398,384,385,386,387,388,466],
+  browA:[70,63,105,66,107,55,65,52,53,46],
+  browB:[300,293,334,296,336,285,295,282,283,276],
+};
+const IRIS_A=468, IRIS_B=473, CHIN=152, TOP=10, NOSE=1;
+const EYE_A_OUT=33, EYE_B_OUT=263;
+const EYE_CLOSED_EAR=0.19, EYE_OPEN_EAR=0.26;
+const SKIN_PTS=[50,280,234,454,118,347];
+const MARKS={chin:CHIN};
+
+/* ========================================================================== */
+const video=document.getElementById("cam"), canvas=document.getElementById("fx");
+const ctx=canvas.getContext("2d",{willReadFrequently:true});
+const labels=document.getElementById("labels");
+const elPct=document.getElementById("pct"), elVerd=document.getElementById("verdict");
+const elSub=document.getElementById("sub"), elDbg=document.getElementById("debug");
+const mediaBox=document.getElementById("mediabox");
+const mediaImg=document.getElementById("mediaimg"), mediaVid=document.getElementById("mediavid");
+
+let showDebug=false, recalibrate=false, truthMode=false, tongueDebug=false;
+
+function handleKey(key,code){
+  const k=(key||"").toLowerCase();
+  if(k==="f") document.documentElement.requestFullscreen();
+  if(code==="Space"||k===" ") recalibrate=true;
+  if(k==="d"){ showDebug=!showDebug; elDbg.style.display=showDebug?"block":"none";
+               if(showDebug) elDbg.textContent="debug on - waiting for a frame..."; }
+  if(k==="t") tongueDebug=!tongueDebug;
+  if(k==="v"){ truthMode=!truthMode; document.body.classList.toggle("truth",truthMode); }
+  if(["1","2"].includes(k) && parent!==window) parent.postMessage({demo:k},"*");
+}
+addEventListener("keydown",(e)=>{
+  if(e.code==="Space") e.preventDefault();
+  handleKey(e.key,e.code);
+});
+// The shell forwards keys here, because an un-focused iframe never gets them.
+addEventListener("message",(e)=>{
+  if(!e.data) return;
+  if(e.data.type==="key") handleKey(e.data.key,e.data.code);
+  if(e.data.type==="visibility"){
+    const p=!e.data.visible;
+    if(p!==paused){ paused=p; if(!paused){ tracks=[]; requestAnimationFrame(loop); } }
+  }
+});
+
+/* ==========================================================================
+   3. Channels: blendshapes (loosely FACS action units) + real geometry
+   ========================================================================== */
+const bs=(m,n)=>m.get(n)||0, avg=(m,a,b)=>(bs(m,a)+bs(m,b))/2;
+
+function readChannels(map){
+  const gazeL=(bs(map,"eyeLookOutLeft")+bs(map,"eyeLookInRight"))/2;
+  const gazeR=(bs(map,"eyeLookInLeft")+bs(map,"eyeLookOutRight"))/2;
+  return {
+    smile:avg(map,"mouthSmileLeft","mouthSmileRight"),           // AU12
+    frown:avg(map,"mouthFrownLeft","mouthFrownRight"),           // AU15
+    cheekSquint:avg(map,"cheekSquintLeft","cheekSquintRight"),   // AU6 - the tell
+    browDown:avg(map,"browDownLeft","browDownRight"),            // AU4
+    browInnerUp:bs(map,"browInnerUp"),                           // AU1
+    browOuterUp:avg(map,"browOuterUpLeft","browOuterUpRight"),   // AU2
+    browAsym:Math.abs(bs(map,"browOuterUpLeft")-bs(map,"browOuterUpRight")),
+    jaw:bs(map,"jawOpen"),
+    eyeWide:avg(map,"eyeWideLeft","eyeWideRight"),               // AU5
+    squint:avg(map,"eyeSquintLeft","eyeSquintRight"),            // AU7
+    lookDown:avg(map,"eyeLookDownLeft","eyeLookDownRight"),
+    lookUp:avg(map,"eyeLookUpLeft","eyeLookUpRight"),
+    lookAway:Math.max(gazeL,gazeR),
+    sneer:avg(map,"noseSneerLeft","noseSneerRight"),             // AU9
+    upperLipUp:avg(map,"mouthUpperUpLeft","mouthUpperUpRight"),  // AU10
+    stretch:avg(map,"mouthStretchLeft","mouthStretchRight"),     // AU20
+    press:avg(map,"mouthPressLeft","mouthPressRight"),           // AU24
+    rollLower:bs(map,"mouthRollLower"),
+    pucker:bs(map,"mouthPucker"), funnel:bs(map,"mouthFunnel"),
+    cheekPuff:bs(map,"cheekPuff"),
+    mouthShrug:avg(map,"mouthShrugUpper","mouthShrugLower"),
+    mouthSide:Math.max(bs(map,"mouthLeft"),bs(map,"mouthRight")),
+    mouthAsym:Math.abs(bs(map,"mouthSmileLeft")-bs(map,"mouthSmileRight")),
+    tongueShape:bs(map,"tongueOut"),
+  };
+}
+
+function ringBounds(pts,idx,W,H){
+  let minX=1e9,maxX=-1e9,minY=1e9,maxY=-1e9;
+  for(const i of idx){ const x=pts[i].x*W,y=pts[i].y*H;
+    minX=Math.min(minX,x);maxX=Math.max(maxX,x);minY=Math.min(minY,y);maxY=Math.max(maxY,y); }
+  const w=maxX-minX,h=maxY-minY;
+  return {minX,maxX,minY,maxY,w,h,ear:w>0?h/w:0};
+}
+
+// Geometry beats blendshapes here - unambiguous, and nothing to train.
+function readGeometry(pts,W,H){
+  const a=ringBounds(pts,RING.eyeA,W,H), b=ringBounds(pts,RING.eyeB,W,H);
+  const shutA=a.ear<EYE_CLOSED_EAR, shutB=b.ear<EYE_CLOSED_EAR;
+  const wink=(shutA&&b.ear>EYE_OPEN_EAR)||(shutB&&a.ear>EYE_OPEN_EAR);
+  const off=(bnd,iris)=>{ const cx=(bnd.minX+bnd.maxX)/2;
+    return bnd.w>0?((pts[iris]?pts[iris].x*W:cx)-cx)/bnd.w:0; };
+  const converge=Math.min(1,Math.max(0,(off(a,IRIS_A)-off(b,IRIS_B))*3));
+  const dx=(pts[EYE_B_OUT].x-pts[EYE_A_OUT].x)*W, dy=(pts[EYE_B_OUT].y-pts[EYE_A_OUT].y)*H;
+  const roll=Math.abs(Math.atan2(dy,dx)*180/Math.PI);
+  return { earA:a.ear, earB:b.ear, bothShut:shutA&&shutB, wink:wink?1:0,
+           converge, roll };
+}
+
+const CALIB_KEYS=["smile","frown","cheekSquint","browDown","browInnerUp","browOuterUp",
+  "browAsym","jaw","eyeWide","squint","sneer","upperLipUp","stretch","press","rollLower",
+  "pucker","funnel","mouthShrug","mouthSide","mouthAsym","lookDown"];
+
+// Deadband on top of the baseline: residual noise after subtraction was
+// enough to keep weak states flickering. This is what stops the twitching.
+const DEADBAND=0.03;
+function applyBaseline(c,base){
+  if(!base) return c;
+  const o=Object.assign({},c);
+  for(const k of CALIB_KEYS) o[k]=Math.max(0,c[k]-base[k]*0.9-DEADBAND);
+  return o;
+}
+
+// Exponential moving average. Raw blendshapes jitter frame to frame and the
+// label flickers, which reads as inaccuracy even when the answer is right.
+const SMOOTH=0.4;
+function smoothChannels(prev,c){
+  if(!prev) return Object.assign({},c);
+  const o={};
+  for(const k in c) o[k]=typeof c[k]==="number"?prev[k]*(1-SMOOTH)+c[k]*SMOOTH:c[k];
+  return o;
+}
+
+// ramp(v, lo, hi): 0 below lo, 1 above hi, linear between. Every state has a
+// PRIMARY feature that must clear its own ramp before boosters count at all.
+// The old additive scores let one strong channel win states it had no
+// business winning (a big jaw drop scored SHOCKED, YAWN and SHOUTING at once).
+// Weights reflect how reliable MediaPipe's blendshapes actually are: jaw,
+// smile, pucker, brow-down, blink and cheek-puff are good; frown, sneer and
+// lip-roll are weak and get higher thresholds.
+const ramp=(v,lo,hi)=>v<=lo?0:v>=hi?1:(v-lo)/(hi-lo);
+
+function scoreStates(c,g,tm,tongueOut){
+  const smile=ramp(c.smile,0.30,0.70);
+  // genuine-smile eye crinkle: MediaPipe spreads it over cheekSquint AND eyeSquint
+  const crinkle=ramp(Math.max(c.cheekSquint,c.squint*0.85),0.22,0.55);
+  // "silly": two or more exaggerated features at the same time
+  const sillyBits=[c.pucker>0.4,c.cheekPuff>0.4,c.browOuterUp>0.45,c.eyeWide>0.45,c.sneer>0.4,
+                   c.mouthSide>0.4,c.jaw>0.55,g.converge>0.45,c.funnel>0.45].filter(Boolean).length;
+  const jaw=ramp(c.jaw,0.35,0.70), noSmile=1-ramp(c.smile,0.10,0.30);
+  return {
+    // --- deliberate faces: strong, but each needs its defining feature ---
+    TONGUE:      tongueOut?2.5:0,
+    WINK:        g.wink?1.1:0,
+    CROSS_EYED:  ramp(g.converge,0.45,0.80)*1.2,
+    PUFFERFISH:  ramp(c.cheekPuff,0.35,0.70)*1.3,
+    KISS:        ramp(c.pucker,0.45,0.80)*(0.7+0.5*ramp(c.funnel,0.20,0.50)),
+    DUCK_FACE:   ramp(c.pucker,0.40,0.75)*(1-ramp(c.funnel,0.15,0.40))*1.0,
+    BIG_GRIN:    ramp(c.smile,0.60,0.90)*ramp(c.jaw,0.20,0.45)*1.3,
+    YAWN:        ramp(c.jaw,0.60,0.85)*(0.7+0.5*(g.bothShut?1:0)),
+    LAUGHING:    ramp(c.smile,0.45,0.80)*(g.bothShut?1.2:crinkle*0.9),
+    SMOULDER:    ramp(c.squint,0.30,0.60)*ramp(c.smile,0.10,0.30)*(1-ramp(c.jaw,0.10,0.30))*0.9,
+    SIDE_EYE:    ramp(c.lookAway,0.45,0.80)*1.1,
+    LIP_BITE:    ramp(c.rollLower,0.40,0.70)*1.0,
+    EYE_ROLL:    ramp(c.lookUp,0.45,0.80)*1.1,
+    HEAD_TILT:   ramp(g.roll,12,25)*0.9,
+    MEH:         ramp(c.mouthShrug,0.30,0.60)*noSmile*0.8,
+    // --- felt emotions ---
+    DELIGHTED:   smile*(0.5+0.7*crinkle),                 // needs the eyes too
+    FAKE_SMILE:  smile*(1-crinkle)*1.0,                   // mouth only
+    SMIRK:       ramp(c.mouthAsym,0.20,0.45)*ramp(c.smile,0.10,0.30)*1.1,
+    SHOCKED:     jaw*(0.6+0.5*ramp(c.browOuterUp,0.20,0.50)+0.4*ramp(c.eyeWide,0.20,0.50)),
+    TERRIFIED:   ramp(c.eyeWide,0.35,0.70)*(0.6+0.5*ramp(c.browInnerUp,0.20,0.50)+0.4*ramp(c.stretch,0.20,0.50)),
+    FURIOUS:     ramp(c.browDown,0.30,0.65)*(0.7+0.4*Math.max(ramp(c.frown,0.15,0.40),ramp(c.squint,0.25,0.50),ramp(c.press,0.20,0.50))),
+    DISGUSTED:   ramp(c.sneer,0.20,0.50)*(0.7+0.5*ramp(c.upperLipUp,0.15,0.40)),
+    SAD:         Math.max(ramp(c.frown,0.15,0.40)*(0.5+0.7*ramp(c.browInnerUp,0.15,0.40)),
+                          ramp(c.browInnerUp,0.30,0.60)*noSmile*0.8),
+    SKEPTICAL:   ramp(c.browAsym,0.15,0.35)*1.1,
+    SUSPICIOUS:  ramp(c.squint,0.30,0.60)*noSmile*(0.7+0.4*ramp(c.browDown,0.15,0.40)),
+    CONTEMPT:    ramp(c.mouthAsym,0.20,0.45)*noSmile*1.0,
+    CONFUSED:    ramp(c.browAsym,0.12,0.30)*ramp(c.mouthSide,0.15,0.40)*1.2,
+    CRINGE:      ramp(c.squint,0.30,0.60)*ramp(c.stretch,0.20,0.50)*1.2,
+    GRIMACE:     ramp(c.stretch,0.30,0.60)*(0.7+0.4*ramp(c.press,0.20,0.50)),
+    DETERMINED:  ramp(c.press,0.30,0.60)*(0.6+0.5*ramp(c.browDown,0.20,0.50)),
+    SHOUTING:    ramp(c.jaw,0.65,0.90)*(0.8+0.4*ramp(c.stretch,0.20,0.50)),
+    THINKING:    ramp(c.mouthSide,0.25,0.50)*(0.7+0.4*ramp(c.mouthShrug,0.20,0.50)),
+    AVOIDANT:    ramp(c.lookAway,0.35,0.60)*0.8,
+    // --- temporal ---
+    NERVOUS:     ramp(tm.blinkRate,26,45)*0.7,
+    STARING:     tm.settled&&tm.blinkRate<6?0.55:0,
+    BORED:       ramp(c.lookDown,0.30,0.60)*noSmile*0.7,
+    TIRED:       Math.max(ramp(tm.droop,0.30,0.65)*(0.7+0.3*ramp(tm.blinkRate,16,28)),
+                          ramp(c.lookDown,0.25,0.50)*ramp(tm.blinkRate,18,30)*0.7),
+    SILLY:       sillyBits>=2?0.85+0.1*sillyBits:0,
+    DEAD_INSIDE: tm.deadpanFor>8000?0.55:0,
+    DEADPAN:     0.20,                                   // a gated state must beat this
+  };
+}
+
+function rank(states){
+  const e=Object.entries(states).sort((a,b)=>b[1]-a[1]);
+  return { best:e[0][0], bestScore:e[0][1], second:e[1][0], secondScore:e[1][1], all:e };
+}
+
+/* ==========================================================================
+   4. Tracking, calibration, temporal features
+   ========================================================================== */
+const MIN_HOLD_MS=700, SWITCH_MARGIN=0.10, CONFIRM_MS=300;
+const TAG_CONFIRM_MS=150;   // the head tag is live, the verdict is deliberate
+const TRACK_TTL=1400;
+// Calibration now needs STILL frames, not just frames. Fidget and the counter
+// stops climbing and it starts heckling you - which is the funnier version of
+// an accuracy feature, and people try much harder when a machine nags them.
+// Everything below is in MILLISECONDS, not frames. On the CPU delegate the
+// frame rate drops to a handful per second, and frame counts silently become
+// six times stricter - which is exactly how this stopped working.
+const CALIB_MIN_MS=1200, CALIB_TIMEOUT_MS=8000, CALIB_MIN_SAMPLES=8;
+const CALIB_MOVE_RATE=0.75;      // mean per-channel change per SECOND
+const BASE_CAP=0.35;             // a resting face is not 0.8 of anything
+const CALIB_POSE_THRESH=0.16;    // a channel this high is a face being pulled
+const CALIB_NAG_HOLD=900;
+let tracks=[], nextId=0, trackSpawns=0;
+const pick=a=>a[(Math.random()*a.length)|0];
+
+function newTrack(now){
+  const used=new Set(tracks.map(t=>t.colorIdx));
+  let ci=0; while(used.has(ci)&&ci<PALETTE.length-1) ci++;
+  return { id:nextId++, colorIdx:ci, state:"DEADPAN", line:VERDICTS.DEADPAN[0],
+           score:0, pct:0, since:now, born:now, tongueHits:0, sm:null,
+           skin:null, skinAge:1e9, blinks:[], wasShut:false,
+           cand:null, candN:0, margin:0, top:null,
+           calibN:0, calibSum:{}, calibSq:{}, base:null, calibrated:false,
+           roast:null, roastUntil:0, calibStart:0, calibLast:0, calibGoodMs:0,
+           calibPrev:null, calibBad:0, calibNag:null, calibNagUntil:0,
+           candSince:0, lastTongue:null, mediaFiredFor:null };
+}
+
+function matchTrack(cx,cy,now,soleFace){
+  let best=null,bestD=Infinity;
+  for(const t of tracks){
+    if(t.claimed) continue;
+    // the longer since we saw it, the further it is allowed to have moved
+    const gate=0.16+Math.min(0.6,(now-t.seen)/1000)*0.9;
+    const d=Math.hypot(t.cx-cx,t.cy-cy);
+    if(d<gate&&d<bestD){ bestD=d; best=t; }
+  }
+  // One face, one track: it is the same person, however far they jumped.
+  // Without this a slow frame rate spawns a new track every single frame,
+  // calibration restarts forever and no verdict is ever produced.
+  if(!best&&soleFace){
+    const free=tracks.filter(t=>!t.claimed);
+    if(free.length===1) best=free[0];
+  }
+  if(!best){ best=newTrack(now); tracks.push(best); trackSpawns++; }
+  best.cx=cx; best.cy=cy; best.seen=now; best.claimed=true;
+  return best;
+}
+
+// Blink rate needs history. Counting edges over a rolling 10s window gives
+// nervous vs unblinking vs tired, none of which exist in a single frame.
+function temporal(t,g,now){
+  if(g.bothShut&&!t.wasShut) t.blinks.push(now);
+  t.wasShut=g.bothShut;
+  while(t.blinks.length&&now-t.blinks[0]>10000) t.blinks.shift();
+  const secs=Math.min(10,(now-t.born)/1000);
+  // lid droop vs this person's own calibrated eye opening, smoothed so a
+  // blink does not read as exhaustion
+  const ear=(g.earA+g.earB)/2;
+  const droopNow=t.baseEar&&!g.bothShut ? Math.max(0,Math.min(1,(1-ear/t.baseEar)*2.2)) : (t.droopSm||0);
+  t.droopSm=(t.droopSm||0)*0.85+droopNow*0.15;
+  return { droop:t.droopSm, blinkRate: secs>3 ? t.blinks.length*(60/secs) : 12,
+           settled: now-t.born>4000,
+           deadpanFor: t.state==="DEADPAN" ? now-t.since : 0 };
+}
+
+function calibrate(t,raw,geo,now){
+  if(!t.calibStart){ t.calibStart=now; t.calibLast=now; }
+  const dt=Math.min(250,now-t.calibLast); t.calibLast=now;
+  const elapsed=now-t.calibStart;
+
+  let move=0;
+  if(t.calibPrev) for(const k of CALIB_KEYS) move+=Math.abs(raw[k]-t.calibPrev[k]);
+  move/=CALIB_KEYS.length;
+  const rate=dt>0?move/(dt/1000):0;          // per second, so fps cannot skew it
+  t.calibPrev=raw;
+
+  let worst=null,worstV=0;
+  for(const k of CALIB_KEYS) if(CALIB_NAG[k]&&raw[k]>worstV){ worstV=raw[k]; worst=k; }
+
+  const fidgeting=rate>CALIB_MOVE_RATE, posing=worstV>CALIB_POSE_THRESH;
+  const timedOut=elapsed>CALIB_TIMEOUT_MS;
+
+  if(!timedOut&&(fidgeting||posing)){
+    t.calibBad++;
+    if(now>t.calibNagUntil){
+      t.calibNag = posing ? pick(CALIB_NAG[worst])
+        : CALIB_MOVE[Math.min(CALIB_MOVE.length-1, Math.floor(elapsed/1500))];
+      t.calibNagUntil=now+CALIB_NAG_HOLD;
+    }
+    return;                                   // this frame does not count
+  }
+  t.calibNag=null;
+
+  for(const k of CALIB_KEYS){
+    t.calibSum[k]=(t.calibSum[k]||0)+raw[k];
+    t.calibSq[k]=(t.calibSq[k]||0)+raw[k]*raw[k];
+  }
+  t.calibN++; t.calibGoodMs+=dt;
+  t.earSum=(t.earSum||0)+(geo.earA+geo.earB)/2;          // resting eye opening
+
+  if(t.calibGoodMs>=CALIB_MIN_MS||timedOut){
+    if(t.calibN>=CALIB_MIN_SAMPLES){
+      t.base={};
+      // Cap it: a baseline of 0.8 smile is a bad capture, not a resting face,
+      // and subtracting it would flatten every reading to nothing.
+      for(const k of CALIB_KEYS) t.base[k]=Math.min(BASE_CAP,t.calibSum[k]/t.calibN);
+    } else {
+      // Timed out without enough still samples. A baseline built from two bad
+      // frames is far worse than no baseline - it suppresses every channel and
+      // the verdict sticks on BLANK forever. Run uncalibrated instead.
+      t.base=null;
+    }
+    t.baseEar=t.calibN>=3?t.earSum/t.calibN:null;
+    t.calibrated=true;
+    if(timedOut||t.calibBad>t.calibN*1.5){ t.roast=pick(CALIB_ROASTS); t.roastUntil=now+3000; }
+  }
+}
+
+// A single frame beating the current state is not enough - it has to lead
+// for several frames running. This is most of the remaining stability.
+function updateTrackVerdict(t,states,now){
+  const r=rank(states);
+  t.margin=r.bestScore-r.secondScore; t.top=r;
+  if(r.best!==t.state){
+    if(t.cand!==r.best){ t.cand=r.best; t.candSince=now; }
+    if(now-t.candSince>=CONFIRM_MS && now-t.since>MIN_HOLD_MS
+       && r.bestScore>states[t.state]+SWITCH_MARGIN){
+      t.state=r.best; t.line=pick(VERDICTS[r.best]); t.since=now;
+      t.mediaFiredFor=null; t.cand=null;
+    }
+  } else t.cand=null;
+  t.score=states[t.state];
+  t.pct=Math.round(Math.min(99,77+t.score*24));
+  // live tag: whoever leads right now, held 150ms so it does not strobe
+  if(r.best!==t.tagCand){ t.tagCand=r.best; t.tagSince=now; }
+  if(now-t.tagSince>=TAG_CONFIRM_MS) t.tag=r.best;
+  if(!t.tag) t.tag=r.best;
+}
+
+/* ==========================================================================
+   5. Rendering - features only
+   ========================================================================== */
+function ringPath(pts,idx,W,H,close=true){
+  const p=idx.map(i=>({x:pts[i].x*W,y:pts[i].y*H}));
+  const mid=(a,b)=>({x:(a.x+b.x)/2,y:(a.y+b.y)/2});
+  ctx.beginPath();
+  if(close){
+    const m0=mid(p[p.length-1],p[0]); ctx.moveTo(m0.x,m0.y);
+    for(let i=0;i<p.length;i++){ const m=mid(p[i],p[(i+1)%p.length]);
+      ctx.quadraticCurveTo(p[i].x,p[i].y,m.x,m.y); }
+    ctx.closePath();
+  } else {
+    ctx.moveTo(p[0].x,p[0].y);
+    for(let i=1;i<p.length-1;i++){ const m=mid(p[i],p[i+1]);
+      ctx.quadraticCurveTo(p[i].x,p[i].y,m.x,m.y); }
+    ctx.lineTo(p[p.length-1].x,p[p.length-1].y);
+  }
+}
+
+function smoothClosedPath(p){
+  const mid=(a,b)=>({x:(a.x+b.x)/2,y:(a.y+b.y)/2});
+  ctx.beginPath();
+  const m0=mid(p[p.length-1],p[0]); ctx.moveTo(m0.x,m0.y);
+  for(let i=0;i<p.length;i++){ const m=mid(p[i],p[(i+1)%p.length]);
+    ctx.quadraticCurveTo(p[i].x,p[i].y,m.x,m.y); }
+  ctx.closePath();
+}
+
+function irisRadius(pts,c,W,H){
+  let r=0,n=0;
+  for(let i=c+1;i<=c+4;i++){ if(!pts[i]) continue;
+    r+=Math.hypot((pts[i].x-pts[c].x)*W,(pts[i].y-pts[c].y)*H); n++; }
+  return n?r/n:0;
+}
+
+function drawEye(pts,ringIdx,irisIdx,W,H,lw){
+  const m=ringBounds(pts,ringIdx,W,H);
+  ringPath(pts,ringIdx,W,H); ctx.stroke();
+  if(m.ear<EYE_CLOSED_EAR||!pts[irisIdx]) return;      // shut = no pupil
+  ctx.save();
+  ringPath(pts,ringIdx,W,H); ctx.clip();               // can never escape the eye
+  const r=Math.min(irisRadius(pts,irisIdx,W,H), m.h*0.46, m.w*0.30);
+  if(r>1){ ctx.lineWidth=lw*0.9; ctx.beginPath();
+    ctx.arc(pts[irisIdx].x*W,pts[irisIdx].y*H,r,0,Math.PI*2); ctx.stroke(); }
+  ctx.restore();
+}
+
+function drawOutline(pts,colour,tongue,W,H){
+  const faceW=Math.abs(pts[454].x-pts[234].x)*W;
+  const lw=Math.max(1.6,faceW*0.011);
+  ctx.save();
+  ctx.strokeStyle=colour; ctx.shadowColor=colour;
+  ctx.shadowBlur=Math.max(6,faceW*0.05);
+  ctx.lineJoin="round"; ctx.lineCap="round";
+
+  ctx.lineWidth=lw; drawEye(pts,RING.eyeA,IRIS_A,W,H,lw);
+  ctx.lineWidth=lw; drawEye(pts,RING.eyeB,IRIS_B,W,H,lw);
+
+  ctx.globalAlpha=.75; ctx.lineWidth=lw*.85;
+  ringPath(pts,RING.browA,W,H,false); ctx.stroke();
+  ringPath(pts,RING.browB,W,H,false); ctx.stroke();
+
+  ctx.globalAlpha=1; ctx.lineWidth=lw*1.15;
+  ringPath(pts,RING.lipsOuter,W,H); ctx.stroke();
+  ctx.globalAlpha=.7; ctx.lineWidth=lw*.8;
+  ringPath(pts,RING.lipsInner,W,H); ctx.stroke();
+
+  if(tongue&&tongue.found){
+    ctx.strokeStyle="#FF2D6F"; ctx.shadowColor="#FF2D6F"; ctx.lineWidth=lw*1.4;
+    for(const ring of tongue.polys){
+      if(ring.length<4) continue;
+      ctx.globalAlpha=1; smoothClosedPath(ring); ctx.stroke();
+      ctx.globalAlpha=.16; ctx.fillStyle="#FF2D6F"; ctx.fill();
+    }
+  }
+  ctx.restore();
+
+  if(tongueDebug&&tongue){                       // see exactly what it sees
+    ctx.save(); ctx.shadowBlur=0;
+    ctx.strokeStyle="#0f0"; ctx.lineWidth=1;
+    ctx.strokeRect(tongue.box.x0,tongue.box.y0,
+                   tongue.box.x1-tongue.box.x0,tongue.box.y1-tongue.box.y0);
+    ctx.fillStyle="rgba(255,45,111,.6)";
+    if(tongue.debugPx) for(const p of tongue.debugPx) ctx.fillRect(p.x,p.y,2,2);
+    ctx.restore();
+  }
+}
+
+/* ==========================================================================
+   6. Media panel - fires on a SUSTAINED emotion, not on peak confidence
+   ========================================================================== */
+let mediaUntil=0;
+function showMedia(state,colour,now){
+  const lib=MEDIA_LIBRARY[state]; if(!lib||!lib.length) return;
+  const src=pick(lib), isVid=/\.(webm|mp4)$/i.test(src);
+  mediaImg.style.display=isVid?"none":"block";
+  mediaVid.style.display=isVid?"block":"none";
+  if(isVid){ mediaVid.src=src; mediaVid.play().catch(()=>{}); } else mediaImg.src=src;
+  mediaBox.style.borderColor=colour; mediaBox.style.display="block";
+  mediaUntil=now+3200;
+}
+
+/* ==========================================================================
+   7. Main loop
+   ========================================================================== */
+let landmarker,lastVideoTime=-1,sawTongueShape=false,activeDelegate="";
+let frameNo=0, fps=0, lastFrameAt=0, detectErrors=0, startAttempts=[], paused=false;
+window.__demoState=()=>({paused, frame:frameNo});   // test hook
+
+async function boot(){
+  elVerd.textContent="LOADING MODEL...";
+  let fileset;
+  try {
+    fileset = await FilesetResolver.forVisionTasks("../shared/wasm");
+  } catch (_) {
+    fileset = await FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+  }
+
+  // Try GPU and CPU, each on two kinds of canvas, and only accept a setup that
+  // survives a real detect on a test frame. Creating a task proves nothing:
+  // on some machines creation works and then every frame throws.
+  let made;
+  try{
+    const faceOpts=(path)=>({
+      baseOptions:{ modelAssetPath:path },
+      outputFaceBlendshapes:true, runningMode:"VIDEO", numFaces:4,
+    });
+    // Local copy first; the CDN copy only if the local one failed to LOAD.
+    // A WebGL failure is not fixed by a different model URL, and retrying it
+    // used to double the time spent failing.
+    made=await createTaskWithFallback(FaceLandmarker, fileset,
+      faceOpts("../shared/face_landmarker.task"),
+      faceOpts("https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"),
+      d => d==="CPU" ? { numFaces:2 } : {});         // CPU: fewer faces, keep the frame rate
+  }catch(e){
+    const r=failureReport(e);
+    showFatalOverlay(r.title, r.lines);
+    elPct.textContent=""; elVerd.textContent="MODEL COULD NOT START"; elSub.textContent="";
+    console.error(e, e.attempts);
+    return;                                        // never open the camera for nothing
+  }
+  landmarker=made.task; startAttempts=made.attempts;
+  activeDelegate=made.delegate+"/"+made.canvas;
+  if(made.delegate==="CPU") document.getElementById("privacy").textContent=
+    "nothing is recorded \u00b7 runs on this laptop \u00b7 cpu mode";
+
+  elVerd.textContent="CAMERA...";
+  // keeps retrying (busy camera, permission, unplugged) and explains meanwhile
+  await openCamera(video, (title, detail) => {
+    elPct.textContent="--%"; elVerd.textContent=title; elSub.textContent=detail;
+  });
+  elSub.textContent="";
+  canvas.width=video.videoWidth || 1280;
+  canvas.height=video.videoHeight || 720;
+  elVerd.textContent="STEP INTO SHOT";
+  if(parent!==window) parent.postMessage({type:"ready"},"*");
+  requestAnimationFrame(loop);
+}
+
+// Release the webcam when switching away so other demos aren't blocked
+window.addEventListener("beforeunload", () => {
+  if (video && video.srcObject) {
+    try { video.srcObject.getTracks().forEach(t => t.stop()); } catch (_) {}
+  }
+});
+
+function loop(){
+  if(paused) return;                            // shell hid us; resumed by message
+  requestAnimationFrame(loop);
+  if(!landmarker||video.readyState<2) return;
+  if(video.currentTime===lastVideoTime) return;
+  lastVideoTime=video.currentTime;
+
+  if (video.videoWidth > 0 && (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight)) {
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+  }
+
+  const now=performance.now(), W=canvas.width, H=canvas.height;
+  frameNo++;
+  if(lastFrameAt){ const inst=1000/Math.max(1,now-lastFrameAt); fps=fps?fps*0.9+inst*0.1:inst; }
+  lastFrameAt=now;
+  ctx.drawImage(video,0,0,W,H);                   // raw frame first
+
+  let res;
+  try{ res=landmarker.detectForVideo(video,now); }
+  catch(e){
+    // Never swallow this silently. A throw every frame renders the video with
+    // nothing drawn on it, which looks exactly like a dead backend.
+    detectErrors++;
+    const msg=(e&&e.message)||String(e);
+    if(detectErrors<=3) console.error("detectForVideo failed:",e);
+    // 'activeTexture on undefined' is the no-WebGL failure wearing a disguise.
+    // Say what it actually is, immediately, instead of echoing the stack trace.
+    // It passed the startup frame test, so failing now is unexpected - say so
+    // plainly, with what was tried, rather than guessing at a cause.
+    if(detectErrors===3){
+      const r=failureReport(Object.assign(e,{attempts:startAttempts}));
+      showFatalOverlay("DETECTION STOPPED WORKING",
+        ["The model passed its startup test on "+activeDelegate+", then failed on live "+
+         "camera frames: <code>"+msg.slice(0,120).replace(/</g,"&lt;")+"</code>"]
+        .concat(r.lines));
+    }
+    if(showDebug) elDbg.textContent="detect-errors "+detectErrors+"\nframes "+frameNo+
+      "\ndelegate "+activeDelegate+"\n\n"+msg.slice(0,300);
+    return;
+  }
+  if(detectErrors){ detectErrors=0; clearFatalOverlay(); }   // it recovered
+  const faces=res.faceLandmarks||[], shapes=res.faceBlendshapes||[];
+
+  labels.innerHTML="";
+  for(const t of tracks) t.claimed=false;
+  if(now>mediaUntil) mediaBox.style.display="none";
+
+  if(!faces.length){
+    tracks=tracks.filter(t=>now-t.seen<TRACK_TTL);
+    ctx.fillStyle="rgba(5,5,7,.42)"; ctx.fillRect(0,0,W,H);
+    elPct.textContent="--%"; elPct.style.color="#FFE600";
+    elVerd.textContent="STEP INTO SHOT"; elSub.textContent="";
+    // debug must still report here, or the panel is an empty invisible box
+    // whenever no face is found - which reads as "nothing is happening"
+    if(showDebug) elDbg.textContent=
+      "delegate "+activeDelegate+"   fps "+fps.toFixed(1)+"   frames "+frameNo+
+      "\ndetect-errors "+detectErrors+"   tracks "+tracks.length+
+      "   new-tracks "+trackSpawns+
+      "\n\nNO FACE DETECTED\n(loop is running - the model sees no face)";
+    return;
+  }
+
+  // pass 1: everything that needs RAW pixels, before anything is drawn over
+  const analysed=faces.map((pts,i)=>{
+    const cats=(shapes[i]&&shapes[i].categories)||[];
+    const map=new Map(cats.map(x=>[x.categoryName,x.score]));
+    if(map.has("tongueOut")) sawTongueShape=true;
+    const t=matchTrack(pts[NOSE].x,pts[NOSE].y,now,faces.length===1);
+    if(t.skinAge>10){ t.skin=sampleSkin(ctx,pts,SKIN_PTS,W,H); t.skinAge=0; }
+    else t.skinAge++;
+    // the pixel scan is the expensive part - halve it, reuse the last result
+    const due=(frameNo%2===0)||tongueDebug;
+    const tongue=due?detectTongue(ctx,pts,t.skin,RING,MARKS,W,H,tongueDebug):t.lastTongue;
+    t.lastTongue=tongue;
+    return { pts, t, raw:readChannels(map), geo:readGeometry(pts,W,H), tongue };
+  });
+
+  ctx.fillStyle="rgba(5,5,7,.42)"; ctx.fillRect(0,0,W,H);
+
+  let mainIdx=0,mainSize=0; const drawn=[];
+
+  analysed.forEach(a=>{
+    const t=a.t;
+    if(recalibrate){ t.calibN=0; t.calibSum={}; t.calibSq={}; t.base=null;
+                     t.calibrated=false; t.roast=null; t.calibStart=0;
+                     t.calibLast=0; t.calibGoodMs=0; t.calibBad=0;
+                     t.calibNag=null; t.calibPrev=null; }
+    if(!t.calibrated) calibrate(t,a.raw,a.geo,now);
+
+    t.sm=smoothChannels(t.sm,applyBaseline(a.raw,t.base));
+    const c=t.sm, tm=temporal(t,a.geo,now);
+
+    const hit=a.tongue&&a.tongue.found;
+    // rises one per frame, needs three in a row: a single lip-coloured frame
+    // no longer flips the verdict to TONGUE
+    t.tongueHits=hit?Math.min(5,t.tongueHits+1):Math.max(0,t.tongueHits-1);
+    const tongueOut=t.tongueHits>=3||a.raw.tongueShape>0.35;
+
+    const states=scoreStates(c,a.geo,tm,tongueOut);
+    const colour=PALETTE[t.colorIdx%PALETTE.length];
+
+    if(t.calibrated){
+      updateTrackVerdict(t,states,now);
+      if(now-t.since>MEDIA_HOLD_MS && t.mediaFiredFor!==t.state){
+        t.mediaFiredFor=t.state; showMedia(t.state,colour,now);
+      }
+    }
+
+    drawOutline(a.pts,colour,a.tongue,W,H);
+    const size=Math.abs(a.pts[CHIN].y-a.pts[TOP].y);
+    if(size>mainSize){ mainSize=size; mainIdx=drawn.length; }
+    drawn.push({ t, pts:a.pts, colour, states, tongue:a.tongue, tm,
+                 calibrating:!t.calibrated });
+  });
+
+  recalibrate=false;
+  tracks=tracks.filter(t=>now-t.seen<TRACK_TTL);
+
+  for(const f of drawn){
+    const top=f.pts[TOP], tag=document.createElement("div");
+    tag.className="tag";
+    tag.textContent=f.calibrating?(f.t.calibNag?"BEHAVE":"CALIBRATING"):WORD[f.t.tag||f.t.state];
+    tag.style.background=f.calibrating?"#888":f.colour;
+    tag.style.left=(1-top.x)*100+"%";               // canvas is CSS-mirrored
+    tag.style.top=Math.max(6,top.y*100-3)+"%";
+    labels.appendChild(tag);
+  }
+
+  const m=drawn[mainIdx], t=m.t;
+  elPct.style.color=m.colour;
+
+  if(m.calibrating){
+    elPct.textContent="--%";
+    elVerd.textContent=t.calibNag||"HOLD A NEUTRAL FACE";
+    elSub.textContent=t.calibNag ? "not counting that. try again."
+                                 : "learning your resting face";
+  } else if(t.roast&&now<t.roastUntil){
+    elPct.textContent="--%"; elVerd.textContent=t.roast;
+    elSub.textContent="calibrated anyway. results may be your fault.";
+  } else if(truthMode){
+    elPct.textContent=t.margin.toFixed(2);
+    elVerd.textContent=t.top.best+" "+t.top.bestScore.toFixed(2)
+                      +"  /  "+t.top.second+" "+t.top.secondScore.toFixed(2);
+    elSub.textContent="real margin between top two. the big % is theatre.";
+  } else {
+    elPct.textContent=t.pct+"%";
+    elVerd.textContent=t.line;
+    elSub.textContent=EVIDENCE[t.state]||"";
+  }
+
+  if(showDebug){
+    const tg=m.tongue;
+    elDbg.textContent=
+      "delegate "+activeDelegate+"   fps "+fps.toFixed(1)+"   frames "+frameNo+
+      "\nfaces "+drawn.length+"   new-tracks "+trackSpawns+
+      "   detect-errors "+detectErrors+
+      "\ncalibrated "+(m.calibrating?"NO - "+(t.calibNag||"collecting"):"yes")+
+      "   baseline "+(t.base?"on":"none (uncalibrated)")+
+      "   good samples "+t.calibN+
+      "\nblink/min "+m.tm.blinkRate.toFixed(0)+
+      "\ntongue: aperture "+(tg?tg.apFrac.toFixed(3):"-")+
+      "  below-lip "+(tg?tg.belFrac.toFixed(3):"-")+
+      "  need "+TONGUE.apertureFill+"/"+TONGUE.belowFill+
+      "\ncontour pts: "+(tg&&tg.poly?tg.poly.length:0)+
+      "   blendshape tongueOut: "+(sawTongueShape?"yes":"no")+
+      "\ncalibrated: "+(m.calibrating?"no":"yes")+"   [space] redo   [t] overlay\n"+
+      (t.top ? t.top.all.slice(0,8).map(([k,v])=>k.padEnd(14)+v.toFixed(3)).join("\n")
+             : Object.entries(m.states).sort((a,b)=>b[1]-a[1]).slice(0,8)
+                 .map(([k,v])=>k.padEnd(14)+v.toFixed(3)).join("\n"));
+  }
+}
+
+boot().catch(err=>{
+  elPct.textContent="";
+  const msg=(err&&err.message)||String(err);
+  elVerd.textContent = /webgl|kGpuService|StartGraph/i.test(msg)
+    ? "GRAPHICS UNAVAILABLE" : "ERROR: "+msg;
+  elSub.textContent = /webgl|kGpuService|StartGraph/i.test(msg)
+    ? "turn on hardware acceleration in your browser, then reload"
+    : "";
+  console.error(err);
+});
+</script>
+</body>
+</html>

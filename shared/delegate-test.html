@@ -1,0 +1,172 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<script src="file-guard.js"></script><title>delegate test</title>
+<style>
+ body{background:#111;color:#eee;font-family:ui-monospace,Consolas,monospace;padding:16px}
+ #out div{white-space:pre-wrap;font-size:13px;line-height:1.65}
+ .ok{color:#4f4}.bad{color:#f55}.dim{opacity:.55}.head{margin-top:12px;color:#8cf}
+ .result{margin-top:16px;font-size:15px!important;font-weight:bold}
+</style></head>
+<body>
+<div id="out"></div>
+
+<!-- Classic script first: it logs failures the module below cannot report
+     itself. The previous version of this page used bare top-level awaits, so
+     any throw froze it on "running" with no explanation. -->
+<script>
+window.__log = function (text, cls) {
+  var d = document.createElement("div");
+  if (cls) d.className = cls;
+  d.textContent = text;
+  document.getElementById("out").appendChild(d);
+  return d;
+};
+addEventListener("error", function (e) { __log("UNCAUGHT ERROR: " + e.message, "bad"); });
+addEventListener("unhandledrejection", function (e) {
+  __log("UNHANDLED: " + ((e.reason && e.reason.message) || e.reason), "bad");
+});
+__log("delegate test - each step prints as it happens", "dim");
+</script>
+
+<script type="module">
+const log = window.__log;
+const results = [];
+const check = (name, pass) => { results.push([name, pass]); log((pass ? "PASS  " : "FAIL  ") + name, pass ? "ok" : "bad"); };
+
+const LOCAL_FACE = "./face_landmarker.task";
+const LOCAL_HAND = "./hand_landmarker.task";
+const CDN_FACE = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+const CDN_HAND = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+
+async function main() {
+  if (window.__FILE_PROTOCOL) return;      // file-guard.js has already explained
+  // ---- 1. libraries --------------------------------------------------------
+  log("1. loading libraries", "head");
+  let V, mp;
+  try {
+    try {
+      V = await import("./vendor/vision_bundle.mjs");
+    } catch (_) {
+      V = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs");
+    }
+    mp = await import("./mp.js");
+    check("libraries load", true);
+  } catch (e) {
+    check("libraries load", false); log("   " + e.message, "bad");
+    return finish(false, "load");
+  }
+
+  // ---- 2. WebGL ------------------------------------------------------------
+  log("2. WebGL probe", "head");
+  const p = mp.webglProbe();
+  log("   webgl2 (page canvas) ...... " + p.webgl2 + (p.webgl2 ? "" : "   " + p.reason));
+  log("   webgl1 (page canvas) ...... " + p.webgl1);
+  log("   webgl2 (OffscreenCanvas) .. " + p.offscreenWebgl2 + (p.offscreenWebgl2 ? "" : "   " + p.offscreenReason));
+  log("   renderer .................. " + (p.renderer || "-"));
+  log("   software rendering ........ " + p.software);
+  // Published in the title so an external harness can read it over the
+  // DevTools /json endpoint without needing a websocket.
+  window.__summary = "";
+  document.title = "PROBE webgl2=" + p.webgl2 + " webgl1=" + p.webgl1 +
+    " offscreen=" + p.offscreenWebgl2 + " sw=" + p.software + " | " + (p.renderer || "").slice(0, 70);
+
+  // ---- 3. wasm -------------------------------------------------------------
+  log("3. loading MediaPipe wasm", "head");
+  let fileset;
+  try {
+    try {
+      fileset = await V.FilesetResolver.forVisionTasks("./wasm");
+    } catch (_) {
+      fileset = await V.FilesetResolver.forVisionTasks(
+        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+    }
+    check("wasm loads", true);
+  } catch (e) {
+    check("wasm loads", false); log("   " + e.message, "bad");
+    return finish(false, "load");
+  }
+
+  const progress = (label) => (ev) => {
+    if (ev.phase === "start") log("   " + label + ": trying " + ev.delegate + " / " + ev.canvas + " canvas ...", "dim");
+    else log("   " + label + ": " + ev.delegate + " / " + ev.canvas + " -> " +
+             (ev.ok ? "WORKS (" + ev.ms + "ms, processed a test frame)" : "failed: " + ev.error.slice(0, 140)),
+             ev.ok ? "ok" : "bad");
+  };
+
+  // ---- 4. face - exactly what the mood demo does ----------------------------
+  log("4. face model (same code path as the mood demo)", "head");
+  let face = null;
+  for (const mPath of [LOCAL_FACE, CDN_FACE]) {
+    try {
+      face = await mp.createTask(V.FaceLandmarker, fileset,
+        { baseOptions: { modelAssetPath: mPath }, outputFaceBlendshapes: true, runningMode: "VIDEO", numFaces: 4 },
+        d => d === "CPU" ? { numFaces: 2 } : {}, progress("face"));
+      check("face model starts AND processes a frame (" + face.delegate + "/" + face.canvas + ")", true);
+    window.__summary += "face=" + face.delegate + "/" + face.canvas + " ";
+      face.task.close && face.task.close();
+      break;
+    } catch (e) {
+      if (mPath === CDN_FACE) check("face model starts AND processes a frame", false);
+      else log("   local face model failed, trying CDN fallback...", "dim");
+    }
+  }
+
+  // ---- 5. hands - exactly what pictionary does ------------------------------
+  log("5. hand model (same code path as pictionary)", "head");
+  let hand = null;
+  for (const mPath of [LOCAL_HAND, CDN_HAND]) {
+    try {
+      hand = await mp.createTask(V.HandLandmarker, fileset,
+        { baseOptions: { modelAssetPath: mPath }, runningMode: "VIDEO", numHands: 2 },
+        null, progress("hand"));
+      check("hand model starts AND processes a frame (" + hand.delegate + "/" + hand.canvas + ")", true);
+    window.__summary += "hand=" + hand.delegate + "/" + hand.canvas + " ";
+      hand.task.close && hand.task.close();
+      break;
+    } catch (e) {
+      if (mPath === CDN_HAND) check("hand model starts AND processes a frame", false);
+      else log("   local hand model failed, trying CDN fallback...", "dim");
+    }
+  }
+
+  // ---- 6. is the canvas option real? ----------------------------------------
+  // The "page canvas" fallback only helps if tasks-vision actually honours
+  // `canvas`. If it binds WebGL to our canvas, a 2d context is then refused.
+  log("6. does tasks-vision honour the canvas option?", "head");
+  try {
+    const c = document.createElement("canvas");
+    const t = await V.FaceLandmarker.createFromOptions(fileset,
+      { baseOptions: { modelAssetPath: LOCAL_FACE, delegate: p.webgl2 ? "GPU" : "CPU" },
+        runningMode: "IMAGE", canvas: c });
+    const bound = c.getContext("2d") === null;
+    log("   our canvas now holds MediaPipe's WebGL context: " + bound, bound ? "ok" : "bad");
+    t.close && t.close();
+  } catch (e) {
+    log("   could not check: " + e.message.slice(0, 140), "dim");
+  }
+
+  finish(!!face && !!hand);
+}
+
+// A failure to LOAD the test is a different problem from a failure to RUN
+// the model, and the advice must not mix them up. (It used to: opening this
+// page from the folder produced a RESULT line blaming browser GPU settings.)
+function finish(ok, why) {
+  let text;
+  if (ok) text = "RESULT: this browser can run both demos";
+  else if (why === "load")
+    text = location.protocol === "file:"
+      ? "RESULT: the test could not load because this page was opened from the folder. " +
+        "Run start.bat, then open http://localhost:8124/shared/delegate-test.html"
+      : "RESULT: the test could not load its libraries. They come from a CDN, so check the " +
+        "internet connection. This is not a WebGL problem.";
+  else text = "RESULT: this browser cannot run the demos yet - see the failures above, and try the " +
+              "chrome://settings/system and chrome://flags/#enable-unsafe-swiftshader fixes";
+  log(text, "result " + (ok ? "ok" : "bad"));
+  document.title = (ok ? "OK" : "FAIL") + " | " + (window.__summary || "") +
+    (why ? "why=" + why : "") + " | ua=" + navigator.userAgent.slice(-60);
+}
+
+main().catch(e => log("TEST CRASHED: " + ((e && e.message) || e), "bad"));
+</script>
+</body></html>
