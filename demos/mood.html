@@ -9,7 +9,9 @@
   body { background:#050507; color:#fff; overflow:hidden; height:100vh;
          font-family:"Helvetica Neue", Arial, sans-serif; }
   #stage { position:relative; width:100vw; height:100vh; }
-  #cam { display:none; }
+  /* hidden without display:none - iOS Safari can refuse to play a video that
+     is not displayed, and every frame is read from this element */
+  #cam { position:absolute; width:1px; height:1px; opacity:0; pointer-events:none; }
   #fx { position:absolute; inset:0; width:100%; height:100%;
         object-fit:cover; transform:scaleX(-1); }
   #labels { position:absolute; inset:0; pointer-events:none; }
@@ -667,6 +669,21 @@ window.__demoState=()=>({paused, frame:frameNo});   // test hook
 
 async function boot(){
   elVerd.textContent="LOADING MODEL...";
+  // Ask for the camera straight away, while the model loads. Deployed, this
+  // runs in a visitor's everyday browser: the permission prompt should be the
+  // first thing they see, and a model that cannot start there (WebGL off) must
+  // not stop the camera from ever being requested.
+  let modelLoading=true, cameraOpen=false, cameraProblem=false;
+  // keeps retrying (busy camera, permission, unplugged) and explains meanwhile
+  const cameraReady=openCamera(video, (title, detail) => {
+    cameraProblem=true;
+    elPct.textContent="--%"; elVerd.textContent=title; elSub.textContent=detail;
+  }).then(stream => {
+    cameraOpen=true;
+    if(modelLoading){ elVerd.textContent="LOADING MODEL..."; elSub.textContent=""; }
+    return stream;
+  });
+
   let fileset;
   try {
     fileset = await FilesetResolver.forVisionTasks("../shared/wasm");
@@ -692,22 +709,21 @@ async function boot(){
       faceOpts("https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"),
       d => d==="CPU" ? { numFaces:2 } : {});         // CPU: fewer faces, keep the frame rate
   }catch(e){
+    modelLoading=false;
     const r=failureReport(e);
     showFatalOverlay(r.title, r.lines);
     elPct.textContent=""; elVerd.textContent="MODEL COULD NOT START"; elSub.textContent="";
     console.error(e, e.attempts);
     return;                                        // never open the camera for nothing
   }
+  modelLoading=false;
   landmarker=made.task; startAttempts=made.attempts;
   activeDelegate=made.delegate+"/"+made.canvas;
   if(made.delegate==="CPU") document.getElementById("privacy").textContent=
     "nothing is recorded \u00b7 runs on this laptop \u00b7 cpu mode";
 
-  elVerd.textContent="CAMERA...";
-  // keeps retrying (busy camera, permission, unplugged) and explains meanwhile
-  await openCamera(video, (title, detail) => {
-    elPct.textContent="--%"; elVerd.textContent=title; elSub.textContent=detail;
-  });
+  if(!cameraOpen && !cameraProblem) elVerd.textContent="CAMERA...";
+  await cameraReady;
   elSub.textContent="";
   canvas.width=video.videoWidth || 1280;
   canvas.height=video.videoHeight || 720;

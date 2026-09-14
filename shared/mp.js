@@ -18,6 +18,10 @@
 
 const ATTEMPT_TIMEOUT_MS = 30000;
 
+// Served by start.bat on this machine, as opposed to the deployed site.
+// Advice that says "run start.bat" only makes sense here.
+const IS_LOCAL = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+
 const CONFIGS = [
   { delegate: "GPU", canvas: "default" },   // what tasks-vision does on its own
   { delegate: "GPU", canvas: "page" },      // ordinary <canvas> instead of OffscreenCanvas
@@ -191,6 +195,10 @@ export async function createTaskWithFallback(Klass, fileset, localOptions, cdnOp
 /** Turn a getUserMedia failure into a title + one-line instruction. */
 export function describeCameraError(e) {
   const n = (e && e.name) || "";
+  // Browsers remove the camera API entirely outside https:// and localhost.
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia)
+    return { title: "CAMERA NEEDS HTTPS",
+             detail: "browsers only allow the camera on secure pages - open this site with https://" };
   if (n === "NotReadableError" || n === "AbortError" || n === "TrackStartError")
     return { title: "CAMERA IS BUSY",
              detail: "another window or app is holding it - close any other browser window " +
@@ -198,7 +206,8 @@ export function describeCameraError(e) {
                      "retrying automatically" };
   if (n === "NotAllowedError" || n === "PermissionDeniedError" || n === "SecurityError")
     return { title: "CAMERA BLOCKED",
-             detail: "click Allow when the browser asks for the camera - retrying" };
+             detail: "click Allow when the browser asks. no prompt? click the camera icon in the " +
+                     "address bar and allow the camera - retrying" };
   if (n === "NotFoundError" || n === "DevicesNotFoundError")
     return { title: "NO CAMERA FOUND", detail: "plug one in - retrying" };
   if (n === "OverconstrainedError" || n === "ConstraintNotSatisfiedError")
@@ -265,29 +274,37 @@ export function getWebglHelp() {
   const isEdge = /Edg\//i.test(navigator.userAgent);
   const isFirefox = /Firefox\//i.test(navigator.userAgent);
   const scheme = isEdge ? "edge" : "chrome";
+  const report = "Open <code>shared/delegate-test.html</code> for the full report.";
 
   if (isFirefox) {
     return [
       "<b>1.</b> Open <code>about:config</code>, search for <code>webgl.disabled</code>, set it to <b>false</b>, then reload.",
       "<b>2.</b> Check <code>about:support</code> &mdash; ensure the WebGL Driver section is not blocked.",
-      "<b>3.</b> Or run <code>start.bat</code> to launch an isolated hardware-accelerated stall window.",
-      "Open <code>shared/delegate-test.html</code> for the full report.",
-    ];
+    ].concat(IS_LOCAL
+      ? ["<b>3.</b> Or run <code>start.bat</code> to launch an isolated hardware-accelerated stall window."]
+      : [], report);
   }
 
-  return [
-    "<b>1.</b> Close this window and double-click <code>start.bat</code>. It opens the stall in a " +
+  // start.bat only helps a local copy. A visitor to the deployed site is in
+  // their everyday browser, and that is the browser they have to fix.
+  const steps = [];
+  if (IS_LOCAL) steps.push(
+    "Close this window and double-click <code>start.bat</code>. It opens the stall in a " +
       "<b>separate, clean browser profile</b>, which sidesteps whatever this profile has done to " +
       "WebGL (acceleration switched off, a privacy extension blocking canvas, or a GPU process " +
-      "that crashed earlier and stayed off). This is the fix in almost every case.",
-    "<b>2.</b> If you must use this window: open <code>" + scheme + "://settings/system</code>, " +
+      "that crashed earlier and stayed off). This is the fix in almost every case.");
+  steps.push(
+    (IS_LOCAL ? "If you must use this window: open " : "Open ") +
+      "<code>" + scheme + "://settings/system</code>, " +
       "turn ON <b>Use graphics acceleration when available</b>, and Relaunch.",
-    "<b>3.</b> Still nothing? <code>" + scheme + "://flags/#enable-unsafe-swiftshader</code> &rarr; " +
+    "Still nothing? <code>" + scheme + "://flags/#enable-unsafe-swiftshader</code> &rarr; " +
       "<b>Enabled</b> &rarr; relaunch. (Software WebGL for machines with no usable GPU.)",
-    "<b>4.</b> <code>" + scheme + "://gpu</code> shows what the browser thinks of the GPU; if WebGL " +
-      "says <i>Disabled</i> there, update the graphics driver.",
-    "Open <code>shared/delegate-test.html</code> for the full report.",
-  ];
+    "<code>" + scheme + "://gpu</code> shows what the browser thinks of the GPU; if WebGL " +
+      "says <i>Disabled</i> there, update the graphics driver.");
+  if (!IS_LOCAL) steps.push(
+    "Or try a private window or another browser &mdash; a privacy extension blocking canvas " +
+      "switches WebGL off too.");
+  return steps.map((s, i) => "<b>" + (i + 1) + ".</b> " + s).concat(report);
 }
 
 export const WEBGL_HELP = getWebglHelp();
@@ -312,7 +329,7 @@ export function failureReport(err) {
     title = "THE MODEL COULD NOT START";
     lines = ["WebGL 2 works in this browser, but MediaPipe failed in all four setups " +
              "tried (GPU and CPU, each on two kinds of canvas). That points at the " +
-             "graphics driver rather than a browser setting."].concat(help.slice(1));
+             "graphics driver rather than a browser setting."].concat(IS_LOCAL ? help.slice(1) : help);
   }
 
   if (attempts.length) {

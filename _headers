@@ -1,0 +1,5 @@
+# Cloudflare Pages response headers (start.bat's local server ignores this file).
+# Every demo needs the webcam, and the shell runs the demos in same-origin
+# iframes, so allow the camera for this origin explicitly.
+/*
+  Permissions-Policy: camera=(self), microphone=(self), fullscreen=(self)

@@ -21,6 +21,17 @@
     return "http://localhost:" + (port || 8124) + "/" + rel;
   };
 
+  // Browsers only expose the camera on secure pages. A deployed copy reached
+  // over plain http:// (a custom domain without forced HTTPS) would never even
+  // ask for it, so move to https:// first. localhost is already secure, which
+  // is why start.bat never needed this; bare IP addresses are left alone
+  // because they usually have no certificate to move to.
+  if (location.protocol === "http:" && !window.isSecureContext &&
+      !/^(localhost|[\d.]+|\[[\da-f:]+\])$/i.test(location.hostname)) {
+    location.replace("https://" + location.host + location.pathname + location.search + location.hash);
+    return;
+  }
+
   if (location.protocol !== "file:") return;
   window.__FILE_PROTOCOL = true;
 
