@@ -221,6 +221,15 @@ const CAMERA_ATTEMPTS = [
   { video: true },
 ];
 
+// The back camera is asked for strictly first: a loose "environment" request
+// may hand back the front camera, and then the flip button would do nothing.
+const BACK_CAMERA_ATTEMPTS = [
+  { video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: { exact: "environment" } } },
+  { video: { facingMode: { exact: "environment" } } },
+  { video: { facingMode: "environment" } },
+  { video: true },
+];
+
 /**
  * Open the webcam and keep trying until it works. At a stall the camera gets
  * grabbed by other things all day (a second browser window, Teams, the Camera
@@ -231,11 +240,13 @@ const CAMERA_ATTEMPTS = [
  *
  * @param video     the <video> element to attach to
  * @param onStatus  (title, detail, err) - shown while waiting
+ * @param opts      optional {facing: "user" | "environment", retryMs, attempts}
  * @returns the MediaStream, with the video already playing and sized
  */
 export async function openCamera(video, onStatus, opts) {
   const retryMs = (opts && opts.retryMs) || 3000;
-  const attempts = (opts && opts.attempts) || CAMERA_ATTEMPTS;
+  const attempts = (opts && opts.attempts) ||
+    (opts && opts.facing === "environment" ? BACK_CAMERA_ATTEMPTS : CAMERA_ATTEMPTS);
   let round = 0;
   for (;;) {
     let lastErr = null;
@@ -268,6 +279,71 @@ export async function openCamera(video, onStatus, opts) {
   }
 }
 
+/**
+ * One camera stream on a <video>, kept in step with what the shell asks for:
+ * which way it faces, and whether it is held at all.
+ *
+ * Phones let only one page capture at a time - iOS silently stops the older
+ * stream the moment another one opens - so on a phone the shell has the
+ * hidden demo let go of its camera, and take it back when shown again.
+ * Requests are queued, so a quick double tap on the flip button cannot leave
+ * two streams open.
+ *
+ * @param onStatus  (title, detail, err) while the camera will not open
+ * @param onChange  ({facing, mirrored}) after a new stream is attached
+ * @returns {set({facing, on}) => Promise}
+ */
+export function cameraController(video, onStatus, onChange) {
+  const want = { facing: "user", on: true };
+  let stream = null, asked = null, queue = Promise.resolve();
+
+  const live = () => !!stream && stream.getVideoTracks().some(t => t.readyState === "live");
+  function release() {
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    stream = null; asked = null; video.srcObject = null;
+  }
+
+  function set(changes) {
+    Object.assign(want, changes);
+    queue = queue.then(async () => {
+      if (!want.on) { release(); return; }
+      if (live() && asked === want.facing) return;
+      release();
+      const facing = want.facing;
+      stream = await openCamera(video, onStatus, { facing });
+      asked = facing;
+      // a phone with no back camera falls back to the front one; mirror what
+      // actually arrived, not what was asked for
+      const track = stream.getVideoTracks()[0];
+      const actual = (track && track.getSettings && track.getSettings().facingMode) || facing;
+      if (onChange) onChange({ facing: actual, mirrored: actual !== "environment" });
+    });
+    return queue;
+  }
+
+  return { set };
+}
+
+/**
+ * Draw the camera onto a canvas with no model attached. When the model cannot
+ * start (WebGL off), the stall still shows people themselves behind the
+ * explanation instead of a black screen.
+ *
+ * @param isPaused  optional () => true while the shell has this demo hidden
+ */
+export function startCameraPreview(video, canvas, isPaused) {
+  const ctx = canvas.getContext("2d");
+  (function draw() {
+    requestAnimationFrame(draw);
+    if ((isPaused && isPaused()) || video.readyState < 2) return;
+    if (video.videoWidth && (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight)) {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+    }
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  })();
+}
+
 /* ---------- reporting ---------------------------------------------------- */
 
 export function getWebglHelp() {
@@ -293,6 +369,11 @@ export function getWebglHelp() {
       "<b>separate, clean browser profile</b>, which sidesteps whatever this profile has done to " +
       "WebGL (acceleration switched off, a privacy extension blocking canvas, or a GPU process " +
       "that crashed earlier and stayed off). This is the fix in almost every case.");
+  else steps.push(
+    "<b>Fully restart the browser:</b> paste <code>" + scheme + "://restart</code> into the " +
+      "address bar and press Enter, then come back here. Once its graphics process crashes, the " +
+      "browser keeps WebGL off until it restarts &mdash; that is what switched it off during " +
+      "development, and a restart is usually all it takes.");
   steps.push(
     (IS_LOCAL ? "If you must use this window: open " : "Open ") +
       "<code>" + scheme + "://settings/system</code>, " +
@@ -343,27 +424,40 @@ export function failureReport(err) {
   return { title, lines };
 }
 
+/** A panel rather than a full-screen cover, so the camera stays visible
+ *  behind it. Hide dismisses it; Try again reloads, which is what picks up
+ *  WebGL after the browser has been fixed. */
 export function showFatalOverlay(title, lines) {
   let el = document.getElementById("__fatal");
   if (!el) {
     el = document.createElement("div");
     el.id = "__fatal";
-    el.style.cssText = "position:fixed;inset:0;z-index:9999;background:rgba(5,5,7,.95);" +
-      "color:#fff;font-family:'Helvetica Neue',Arial,sans-serif;display:flex;" +
-      "align-items:center;justify-content:center;padding:5vw;overflow:auto";
+    // clear of the shell's buttons (top edge, phone) and its QR card, which is
+    // --qr wide and 8/7 of that tall in the bottom-right corner
+    const phone = document.documentElement.classList.contains("phone");
+    el.style.cssText = "position:fixed;left:3vw;z-index:9999;box-sizing:border-box;" +
+      (phone ? "top:68px;width:94vw;max-height:calc(100vh - 104px - var(--qr, 0px) * 8 / 7);"
+             : "top:3vw;width:min(880px, calc(97vw - var(--qr, 0px) - 40px));max-height:94vh;") +
+      "overflow:auto;padding:clamp(18px,2.6vw,36px);" +
+      "background:rgba(5,5,7,.88);border:1px solid rgba(255,255,255,.18);border-radius:6px;" +
+      "color:#fff;font-family:'Helvetica Neue',Arial,sans-serif";
     document.body.appendChild(el);
   }
+  const button = "font:700 13px 'Helvetica Neue',Arial,sans-serif;letter-spacing:.1em;" +
+    "padding:9px 16px;border:0;border-radius:3px;cursor:pointer;margin:20px 10px 0 0";
   el.innerHTML =
-    "<div style='max-width:880px'>" +
-    "<div style='font-size:clamp(24px,4vw,50px);font-weight:900;letter-spacing:-.02em;" +
+    "<div style='font-size:clamp(22px,3.4vw,44px);font-weight:900;letter-spacing:-.02em;" +
     "color:#FF3DDA;line-height:1.05'>" + title + "</div>" +
-    lines.map(l => "<div style='font-size:clamp(13px,1.45vw,18px);line-height:1.75;" +
-      "margin-top:13px;opacity:.9'>" + l + "</div>").join("") +
-    "</div>";
+    lines.map(l => "<div style='font-size:clamp(13px,1.3vw,17px);line-height:1.7;" +
+      "margin-top:12px;opacity:.9'>" + l + "</div>").join("") +
+    "<button data-act='retry' style=\"" + button + ";background:#00E5FF;color:#000\">TRY AGAIN</button>" +
+    "<button data-act='hide' style=\"" + button + ";background:rgba(255,255,255,.14);color:#fff\">HIDE</button>";
   el.querySelectorAll("code").forEach(c => {
     c.style.cssText = "background:rgba(255,255,255,.12);padding:2px 7px;border-radius:3px;" +
       "font-family:ui-monospace,Consolas,monospace;font-size:.92em;user-select:all";
   });
+  el.querySelector("[data-act=retry]").onclick = () => location.reload();
+  el.querySelector("[data-act=hide]").onclick = () => el.remove();
 }
 
 export function clearFatalOverlay() {

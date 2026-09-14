@@ -2,7 +2,9 @@
 <html>
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="../shared/file-guard.js"></script>
+<script src="../shared/device.js"></script>
 <title>AIR PICTIONARY</title>
 <style>
   * { box-sizing:border-box; margin:0; padding:0; }
@@ -25,7 +27,7 @@
           line-height:1; margin-top:6px; }
   #timer { font-size:clamp(38px,6vw,84px); font-weight:900; line-height:1;
            font-variant-numeric:tabular-nums; }
-  #guesses { position:absolute; left:36px; bottom:34px; width:min(420px,38vw); }
+  #guesses { position:absolute; left:36px; bottom:48px; width:min(420px,38vw); }
   .g { margin-bottom:11px; }
   .grow { display:flex; justify-content:space-between; align-items:baseline;
           font-weight:800; letter-spacing:.04em; text-transform:uppercase; }
@@ -39,16 +41,35 @@
   .g:nth-child(3) .fill { background:#55606E; }
   .g:nth-child(1) .gname { color:#00E5FF; }
   #banner { position:absolute; inset:0; display:none; align-items:center;
-            justify-content:center; pointer-events:none; }
+            justify-content:center; pointer-events:none;
+            padding-bottom:calc(var(--qr) * 8 / 7 + 32px); }   /* centred above the QR card */
   #banner div { font-size:clamp(40px,9vw,140px); font-weight:900;
                 letter-spacing:-.03em; text-align:center; padding:0 6vw; }
-  #hint, #privacy { position:absolute; bottom:14px; font-size:12px; opacity:.35;
-                    letter-spacing:.05em; }
-  #hint { left:36px; bottom:12px; }
-  #privacy { right:36px; text-align:right; }
-  #hands { position:absolute; right:36px; bottom:44px; text-align:right;
+  /* nothing may enter the shell's QR card in the bottom-right corner: the hint
+     wraps before reaching it and the hand readout sits above it */
+  #hint { position:absolute; left:36px; right:calc(var(--qr) + 48px); bottom:12px;
+          font-size:12px; opacity:.35; letter-spacing:.05em; }
+  #topright { text-align:right; }
+  #privacy { font-size:12px; opacity:.35; letter-spacing:.05em; line-height:1.5;
+             margin:10px 0 0 auto; max-width:34vw; }
+  #hands { position:absolute; right:16px; bottom:calc(var(--qr) * 8 / 7 + 30px); text-align:right;
            font-size:13px; letter-spacing:.1em; opacity:.5; text-transform:uppercase;
            line-height:1.8; }
+
+  /* the shell's QR card sits in the bottom-right corner (same size as there) */
+  :root { --qr:clamp(120px,13vw,230px); }
+  .phone { --qr:92px; }
+  @media (max-width:800px) {                     /* narrow window: the hint would wrap into the guesses */
+    #hint, #privacy { display:none; }            /* and the privacy note becomes a thin column */
+    #guesses { left:14px; bottom:14px; width:calc(100vw - var(--qr) - 60px); }
+  }
+  /* phone: the shell's buttons take the top corners and there is no keyboard */
+  .phone #top { padding:68px 16px 30px; }
+  .phone #word, .phone #timer { font-size:clamp(28px,10vw,44px); }
+  .phone #hint, .phone #privacy { display:none; }
+  .phone #guesses { left:14px; bottom:14px; width:calc(100vw - var(--qr) - 44px); }
+  .phone #hands { right:14px; bottom:calc(var(--qr) * 8 / 7 + 26px); }
+  .phone #banner div { font-size:clamp(34px,12vw,60px); }
 </style>
 </head>
 <body>
@@ -58,13 +79,13 @@
   <div id="top">
     <div><div id="prompt">draw this</div><div id="word">&mdash;</div>
          <div id="trained"></div></div>
-    <div id="timer"></div>
+    <div id="topright"><div id="timer"></div>
+         <div id="privacy">nothing is recorded &middot; runs on this laptop<br>shapes: Google Quick, Draw! dataset (CC BY 4.0)</div></div>
   </div>
   <div id="guesses"></div>
   <div id="hands"></div>
   <div id="banner"><div></div></div>
   <div id="hint">POINT draw &middot; CURL finger to lift the pen &middot; OPEN PALM rub out &middot; N new word &middot; C clear &middot; R teach it this &middot; X forget &middot; F full &middot; 1-2 demo</div>
-  <div id="privacy">nothing is recorded &middot; runs on this laptop &middot; shapes: Google Quick, Draw! dataset (CC BY 4.0)</div>
 </div>
 
 <script type="module">
@@ -72,7 +93,7 @@ import { HandLandmarker, FilesetResolver }
   from "../shared/vendor/vision_bundle.mjs";
 import { createClassifier } from "../shared/sketch-classifier.js";
 import { createTaskWithFallback, failureReport, showFatalOverlay, clearFatalOverlay,
-         openCamera } from "../shared/mp.js";
+         cameraController, startCameraPreview } from "../shared/mp.js";
 
 /* ==========================================================================
    Config
@@ -101,11 +122,31 @@ const elHands=document.getElementById("hands");
 const ink=document.createElement("canvas"); let inkCtx;
 
 const classifier=createClassifier();
-// stroke data is in camera space but the user SEES a mirror; recognise and
-// teach in screen space so a fish drawn facing left matches a fish facing left
-const toScreen=st=>st.map(s=>s.map(p=>({x:1-p.x,y:p.y})));
+// stroke data is in camera space but the user SEES a mirror (front camera);
+// recognise and teach in screen space so a fish drawn facing left matches a
+// fish facing left
+const toScreen=st=>mirrored?st.map(s=>s.map(p=>({x:1-p.x,y:p.y}))):st;
 let strokes=[], current=null, target=null, roundEnd=0, frame=0;
 let lastGuesses=[], banner=null, bannerUntil=0, solved=false;
+
+/* Camera: see mood.html. The back camera is not mirrored, and switching
+   camera clears the drawing, which belongs to the other camera's view. */
+let mirrored=true, modelLoading=true, cameraOpen=false, cameraProblem=false;
+const startFacing=new URLSearchParams(location.search).get("facing")==="environment"?"environment":"user";
+const cam=cameraController(video,(title,detail)=>{
+  // keeps retrying (busy camera, permission, unplugged) and explains meanwhile
+  cameraProblem=true;
+  elWord.textContent=title; document.getElementById("trained").textContent=detail;
+},(info)=>{
+  mirrored=info.mirrored;
+  canvas.style.transform=mirrored?"scaleX(-1)":"none";
+  lastVideoTime=-1;                                // a new stream restarts its clock
+  for(const k in smoothed) delete smoothed[k];
+  for(const k in gstate) delete gstate[k];
+  if(inkCtx) clearInk();
+  cameraOpen=true;
+  if(modelLoading){ elWord.textContent="LOADING..."; document.getElementById("trained").textContent=""; }
+});
 
 /* ==========================================================================
    Hand shape. Finger extension is measured as distance from the wrist:
@@ -222,6 +263,9 @@ addEventListener("message",(e)=>{
   if(e.data.type==="visibility"){
     const p=!e.data.visible;
     if(p!==paused){ paused=p; if(!paused) requestAnimationFrame(loop); }
+    // which camera to use, and (on a phone) let go of it while hidden
+    if("release" in e.data) cam.set({ on:e.data.visible||!e.data.release,
+      facing:e.data.facing==="environment"?"environment":"user" });
   }
 });
 
@@ -334,9 +378,9 @@ function renderGuesses(list){
 /* ==========================================================================
    Main loop
    ========================================================================== */
-let hands, lastVideoTime=-1, activeDelegate="", detectErrors=0, startAttempts=[];
+let hands, lastVideoTime=-1, activeDelegate="", detectErrors=0, startAttempts=[], cameraReady=null;
 let lastPenAt=0, lastClassifyAt=0, lastInkCount=-1, paused=false;
-window.__demoState=()=>({paused, frame});           // test hooks
+window.__demoState=()=>({paused, frame, mirrored});   // test hooks
 window.__gesture=gesture;
 const smoothed={};                 // per hand index, EMA of the fingertip
 
@@ -346,16 +390,7 @@ async function boot(){
   // Ask for the camera straight away, while the model loads, so a model that
   // cannot start in a visitor's browser never stops the camera prompt (see
   // mood.html).
-  let modelLoading=true, cameraOpen=false, cameraProblem=false;
-  // keeps retrying (busy camera, permission, unplugged) and explains meanwhile
-  const cameraReady=openCamera(video, (title, detail) => {
-    cameraProblem=true;
-    elWord.textContent=title; elTrained.textContent=detail;
-  }).then(stream => {
-    cameraOpen=true;
-    if(modelLoading){ elWord.textContent="LOADING..."; elTrained.textContent=""; }
-    return stream;
-  });
+  cameraReady=cam.set({facing:startFacing});
 
   let fileset;
   try {
@@ -381,6 +416,7 @@ async function boot(){
     showFatalOverlay(r.title, r.lines);
     elWord.textContent="MODEL COULD NOT START";
     console.error(e, e.attempts);
+    showCameraOnly();
     return;
   }
   modelLoading=false;
@@ -402,6 +438,11 @@ async function boot(){
   newRound();
   if(parent!==window) parent.postMessage({type:"ready"},"*");
   requestAnimationFrame(loop);
+}
+
+// No model: still show the camera behind the explanation, not a black screen
+function showCameraOnly(){
+  if(cameraReady) cameraReady.then(()=>startCameraPreview(video, canvas, ()=>paused));
 }
 
 // Release the webcam when switching away so other demos aren't blocked
@@ -540,6 +581,7 @@ function loop(){
 }
 
 boot().catch(err=>{
+  showCameraOnly();
   const msg=(err&&err.message)||String(err);
   elWord.textContent = /webgl|kGpuService|StartGraph/i.test(msg)
     ? "GRAPHICS UNAVAILABLE" : "ERROR: "+msg;

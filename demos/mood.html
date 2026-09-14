@@ -2,7 +2,9 @@
 <html>
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="../shared/file-guard.js"></script>
+<script src="../shared/device.js"></script>
 <title>MOOD DETECTOR</title>
 <style>
   * { box-sizing:border-box; margin:0; padding:0; }
@@ -18,7 +20,7 @@
   .tag { position:absolute; transform:translate(-50%,-100%); color:#000;
          font-weight:900; font-size:20px; letter-spacing:.08em;
          padding:3px 11px; white-space:nowrap; border-radius:2px; }
-  #hud { position:absolute; left:0; right:0; bottom:0; padding:24px 40px 30px;
+  #hud { position:absolute; left:0; right:0; bottom:0; padding:24px calc(var(--qr) + 40px) 30px;
          background:linear-gradient(to top, rgba(0,0,0,.93), rgba(0,0,0,0));
          text-align:center; }
   #pct { font-size:clamp(54px,10vw,138px); font-weight:900; line-height:.9;
@@ -35,12 +37,34 @@
            font-family:ui-monospace,Consolas,monospace; font-size:12px;
            line-height:1.5; background:rgba(0,0,0,.72); padding:10px 14px;
            border-radius:4px; white-space:pre; }
-  #mediabox { position:absolute; right:26px; bottom:200px; width:300px;
+  #mediabox { position:absolute; right:26px; bottom:calc(var(--qr) * 8 / 7 + 36px); width:300px;
               border:3px solid #fff; border-radius:4px; overflow:hidden;
               display:none; background:#000; }
   #mediabox img, #mediabox video { display:block; width:100%; }
   body.truth #pct { color:#fff !important; font-size:clamp(40px,7vw,96px); }
   body.truth #sub { opacity:.85; color:#FF2D6F; }
+
+  /* The shell's QR card sits in the bottom-right corner, --qr wide and 8/7 of
+     that tall (same numbers as the shell). No text may enter it: wide screens
+     keep the verdict clear of its column (the symmetric #hud padding above),
+     narrow screens and phones stack the verdict above it, and face labels
+     are moved out of #qrzone as they are placed. */
+  :root { --qr:clamp(120px,13vw,230px); }
+  .phone { --qr:92px; }
+  #qrzone { position:absolute; right:8px; bottom:8px; width:calc(var(--qr) + 16px);
+            height:calc(var(--qr) * 8 / 7 + 16px); visibility:hidden; pointer-events:none; }
+  @media (max-width:800px) {
+    #hud { padding:18px 14px calc(var(--qr) * 8 / 7 + 26px); }
+    #hint { display:none; }                      /* otherwise it runs into #privacy */
+  }
+  .phone #hud { padding:18px 14px calc(var(--qr) * 8 / 7 + 26px); }
+  /* phone: the shell's buttons take the top corners and there is no keyboard */
+  .phone #hint, .phone #privacy { display:none; }
+  .phone #pct { font-size:clamp(46px,17vw,80px); }
+  .phone #verdict { font-size:clamp(18px,6vw,28px); }
+  .phone #mediabox { width:42vw; right:12px; top:68px; bottom:auto; }
+  .phone #debug { top:68px; left:12px; min-width:0; max-width:calc(100vw - 24px); }
+  .phone .tag { font-size:14px; padding:2px 8px; }
 </style>
 </head>
 <body>
@@ -48,6 +72,7 @@
   <video id="cam" playsinline autoplay muted></video>
   <canvas id="fx"></canvas>
   <div id="labels"></div>
+  <div id="qrzone"></div>
   <div id="mediabox"><img id="mediaimg" alt=""><video id="mediavid" autoplay muted loop playsinline></video></div>
   <div id="hint">F full &middot; SPACE recalibrate &middot; V truth &middot; T tongue &middot; D debug &middot; 1-2 switch demo</div>
   <div id="privacy">nothing is recorded &middot; runs on this laptop</div>
@@ -64,7 +89,7 @@ import { FaceLandmarker, FilesetResolver }
   from "../shared/vendor/vision_bundle.mjs";
 import { TONGUE, sampleSkin, detectTongue } from "../shared/tongue.js";
 import { createTaskWithFallback, failureReport, showFatalOverlay, clearFatalOverlay,
-         openCamera } from "../shared/mp.js";
+         cameraController, startCameraPreview } from "../shared/mp.js";
 
 /* ==========================================================================
    1. THE WRITING - edit freely, this is the whole joke
@@ -227,13 +252,30 @@ const MARKS={chin:CHIN};
 /* ========================================================================== */
 const video=document.getElementById("cam"), canvas=document.getElementById("fx");
 const ctx=canvas.getContext("2d",{willReadFrequently:true});
-const labels=document.getElementById("labels");
+const labels=document.getElementById("labels"), qrZone=document.getElementById("qrzone");
 const elPct=document.getElementById("pct"), elVerd=document.getElementById("verdict");
 const elSub=document.getElementById("sub"), elDbg=document.getElementById("debug");
 const mediaBox=document.getElementById("mediabox");
 const mediaImg=document.getElementById("mediaimg"), mediaVid=document.getElementById("mediavid");
 
 let showDebug=false, recalibrate=false, truthMode=false, tongueDebug=false;
+
+/* Camera. On a phone the shell picks the front or back camera and has the
+   hidden demo let go of it (see cameraController in shared/mp.js). The front
+   camera is shown mirrored, like a mirror; the back camera is not. */
+let mirrored=true, modelLoading=true, cameraOpen=false, cameraProblem=false;
+const startFacing=new URLSearchParams(location.search).get("facing")==="environment"?"environment":"user";
+const cam=cameraController(video,(title,detail)=>{
+  // keeps retrying (busy camera, permission, unplugged) and explains meanwhile
+  cameraProblem=true;
+  elPct.textContent="--%"; elVerd.textContent=title; elSub.textContent=detail;
+},(info)=>{
+  mirrored=info.mirrored;
+  canvas.style.transform=mirrored?"scaleX(-1)":"none";
+  tracks=[]; lastVideoTime=-1;                     // a new stream restarts its clock
+  cameraOpen=true;
+  if(modelLoading){ elVerd.textContent="LOADING MODEL..."; elSub.textContent=""; }
+});
 
 function handleKey(key,code){
   const k=(key||"").toLowerCase();
@@ -256,6 +298,9 @@ addEventListener("message",(e)=>{
   if(e.data.type==="visibility"){
     const p=!e.data.visible;
     if(p!==paused){ paused=p; if(!paused){ tracks=[]; requestAnimationFrame(loop); } }
+    // which camera to use, and (on a phone) let go of it while hidden
+    if("release" in e.data) cam.set({ on:e.data.visible||!e.data.release,
+      facing:e.data.facing==="environment"?"environment":"user" });
   }
 });
 
@@ -663,9 +708,9 @@ function showMedia(state,colour,now){
 /* ==========================================================================
    7. Main loop
    ========================================================================== */
-let landmarker,lastVideoTime=-1,sawTongueShape=false,activeDelegate="";
+let landmarker,lastVideoTime=-1,sawTongueShape=false,activeDelegate="",cameraReady=null;
 let frameNo=0, fps=0, lastFrameAt=0, detectErrors=0, startAttempts=[], paused=false;
-window.__demoState=()=>({paused, frame:frameNo});   // test hook
+window.__demoState=()=>({paused, frame:frameNo, mirrored});   // test hook
 
 async function boot(){
   elVerd.textContent="LOADING MODEL...";
@@ -673,16 +718,7 @@ async function boot(){
   // runs in a visitor's everyday browser: the permission prompt should be the
   // first thing they see, and a model that cannot start there (WebGL off) must
   // not stop the camera from ever being requested.
-  let modelLoading=true, cameraOpen=false, cameraProblem=false;
-  // keeps retrying (busy camera, permission, unplugged) and explains meanwhile
-  const cameraReady=openCamera(video, (title, detail) => {
-    cameraProblem=true;
-    elPct.textContent="--%"; elVerd.textContent=title; elSub.textContent=detail;
-  }).then(stream => {
-    cameraOpen=true;
-    if(modelLoading){ elVerd.textContent="LOADING MODEL..."; elSub.textContent=""; }
-    return stream;
-  });
+  cameraReady=cam.set({facing:startFacing});
 
   let fileset;
   try {
@@ -714,7 +750,8 @@ async function boot(){
     showFatalOverlay(r.title, r.lines);
     elPct.textContent=""; elVerd.textContent="MODEL COULD NOT START"; elSub.textContent="";
     console.error(e, e.attempts);
-    return;                                        // never open the camera for nothing
+    showCameraOnly();
+    return;
   }
   modelLoading=false;
   landmarker=made.task; startAttempts=made.attempts;
@@ -730,6 +767,11 @@ async function boot(){
   elVerd.textContent="STEP INTO SHOT";
   if(parent!==window) parent.postMessage({type:"ready"},"*");
   requestAnimationFrame(loop);
+}
+
+// No model: still show the camera behind the explanation, not a black screen
+function showCameraOnly(){
+  if(cameraReady) cameraReady.then(()=>startCameraPreview(video, canvas, ()=>paused));
 }
 
 // Release the webcam when switching away so other demos aren't blocked
@@ -858,14 +900,26 @@ function loop(){
   recalibrate=false;
   tracks=tracks.filter(t=>now-t.seen<TRACK_TTL);
 
+  // Where a camera point lands on screen: the canvas is object-fit:cover
+  // (cropped to fill a phone held upright) and mirrored for the front camera.
+  const sw=canvas.clientWidth||1, sh=canvas.clientHeight||1;
+  const sc=Math.max(sw/W,sh/H), ox=(sw-W*sc)/2, oy=(sh-H*sc)/2;
+  const zone=qrZone.getBoundingClientRect();
   for(const f of drawn){
     const top=f.pts[TOP], tag=document.createElement("div");
     tag.className="tag";
     tag.textContent=f.calibrating?(f.t.calibNag?"BEHAVE":"CALIBRATING"):WORD[f.t.tag||f.t.state];
     tag.style.background=f.calibrating?"#888":f.colour;
-    tag.style.left=(1-top.x)*100+"%";               // canvas is CSS-mirrored
-    tag.style.top=Math.max(6,top.y*100-3)+"%";
     labels.appendChild(tag);
+    // the tag's bottom-centre sits just above the head (translate -50%,-100%)
+    const x=ox+top.x*W*sc, y=oy+top.y*H*sc;
+    let left=mirrored?sw-x:x;
+    const bottom=Math.max(sh*.06,y-sh*.03), half=tag.offsetWidth/2;
+    // a head low in the bottom-right would put its label under the QR card:
+    // slide the label out to the left of the card instead
+    if(left+half>zone.left && bottom>zone.top) left=Math.max(half+4,zone.left-half);
+    tag.style.left=left+"px";
+    tag.style.top=bottom+"px";
   }
 
   const m=drawn[mainIdx], t=m.t;
@@ -913,6 +967,7 @@ function loop(){
 }
 
 boot().catch(err=>{
+  showCameraOnly();
   elPct.textContent="";
   const msg=(err&&err.message)||String(err);
   elVerd.textContent = /webgl|kGpuService|StartGraph/i.test(msg)

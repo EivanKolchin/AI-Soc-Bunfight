@@ -11,11 +11,15 @@ bunfight/
   demos/mood.html     the mood detector
   demos/pictionary.html air pictionary
   media/mood/         drop .webm clips here for the punchline panel
+  media/aisoc-qr.svg  QR card for linktr.ee/AISoc (built by tools/make-qr.mjs)
+  media/aisoc-logo.png society logo, recoloured purple, in the middle of the QR
+  tools/make-qr.mjs   rebuilds the QR card
   shared/tongue.js            tongue detection + contour tracing
   shared/sketch-classifier.js $P sketch recogniser over real Quick, Draw! drawings
   shared/quickdraw-templates.json  ~48 real drawings x 44 shapes (Google Quick, Draw!, CC BY 4.0)
   shared/quickdraw-test.json       held-out drawings used only to measure accuracy
-  shared/mp.js                MediaPipe task creation, GPU -> CPU fallback
+  shared/mp.js                MediaPipe task creation, GPU -> CPU fallback, camera
+  shared/device.js            phone detection (phones get buttons instead of keys)
   shared/tongue-test.html     open in a browser - 3 assertions
   shared/delegate-test.html   open in a browser - checks GPU/CPU both work
   shared/sketch-test.html     open in a browser - 10 assertions
@@ -47,6 +51,24 @@ python -m http.server 8124 --directory "C:/Users/eivan/Desktop/bunfight"
 The folder is self-contained (models and wasm are vendored in `shared/`), so
 copy the whole thing to the stall laptop and `start.bat` works from wherever
 it lands.
+
+## Phones and the QR code
+
+On a phone the shell swaps the keyboard for two buttons: top-left switches
+between the demos, top-right flips between the front and back camera (the
+back camera is not mirrored). Phones allow one camera at a time, so there the
+second demo loads only when asked for and the hidden one lets go of the
+camera. Tablets and laptops keep the keys and the bottom switcher.
+
+Every screen shows a QR card for linktr.ee/AISoc in the bottom-right corner.
+Tap it for a full-screen copy; the X, Esc or a tap outside closes it. The
+demos keep all their text out of that corner. To change the link or the logo,
+edit `LINK` in `tools/make-qr.mjs` or replace `media/aisoc-logo.png`, then:
+
+```bash
+npm install --prefix tools qrcode
+node tools/make-qr.mjs
+```
 
 ## Why does start.bat open a separate browser window?
 

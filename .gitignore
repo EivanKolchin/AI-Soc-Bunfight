@@ -1,1 +1,5 @@
 .claude/
+# tools/make-qr.mjs dependency (npm install --prefix tools qrcode)
+tools/node_modules/
+tools/package.json
+tools/package-lock.json
