@@ -1,4 +1,4 @@
-# AI Society — bunfight stall
+# AI Society - bunfight stall
 
 Two demos behind one shell. Press **1 / 2** to switch, from anywhere.
 Both demos stay loaded: the second warms up in the background once the first
@@ -32,7 +32,7 @@ server, and opens the stall in **its own browser window with its own profile**
 (`%LocalAppData%\bunfight-browser`, Edge or Chrome, whichever is installed).
 Closing the black window stops the server.
 
-Why a separate profile: your everyday browser profile can have WebGL switched
+Why a separate profile: some of our devices during testing had WebGL switched
 off for reasons unrelated to this folder - and the demos cannot run without
 WebGL. A dedicated profile means a fresh GPU process every time. In that
 window the camera prompt is auto-accepted, and its own settings and
@@ -69,23 +69,6 @@ edit `LINK` in `tools/make-qr.mjs` or replace `media/aisoc-logo.png`, then:
 npm install --prefix tools qrcode
 node tools/make-qr.mjs
 ```
-
-## Why does start.bat open a separate browser window?
-
-It is the same Edge (or Chrome), but a **separate profile in its own process**.
-Two reasons:
-
-- The demos need WebGL, and your everyday browser session can have it switched
-  off for reasons that have nothing to do with this folder. On the development
-  laptop, Edge's GPU process crashed once on the first day and Chromium keeps
-  the GPU off until the browser fully quits - which it had not done for 56
-  hours. A fresh profile means a fresh GPU process, every time.
-- The stall window is launched with `--disable-gpu-process-crash-limit`, so one
-  driver hiccup cannot switch WebGL off for the rest of the day. That flag
-  cannot be applied to a browser that is already running.
-
-The first time it asks for the camera, click **Allow** - the stall profile
-remembers it. Its own settings and Pictionary templates persist between days.
 
 ## Mood detector
 
@@ -266,13 +249,12 @@ screen after ten in a row. Press `D` for the count.
 `start.bat` is still open. Closing it stops the server; an already-loaded
 page keeps running until it reloads.
 
-## Before the day
+## Before the bunfight
 
 1. **Go offline.** The wasm and the face model come from a CDN. Download
    `@mediapipe/tasks-vision@0.10.14/wasm` and `face_landmarker.task`, put them
    in `shared/`, and repoint the two URLs at the top of `demos/mood.html`.
-   Pictionary needs `hand_landmarker.task` too. A flaky hall connection
-   otherwise kills the stall at 10am.
+   Pictionary needs `hand_landmarker.task` too.
 
 2. **Tune the tongue detector** with `T` held down, under the actual lighting.
    The constants live in the `TONGUE` object at the top of `mood.html`.
@@ -283,7 +265,7 @@ page keeps running until it reloads.
    joke. This is the highest-value job on the project and none of it is code.
 
 4. **Fill `media/mood/`** with short muted `.webm` clips and list them in
-   `MEDIA_LIBRARY`. Use webm, not gif — gif is a terrible codec and a hundred
+   `MEDIA_LIBRARY`. Use webm, not gif. Gif is a terrible codec and a hundred
    of them will choke the page. Pre-vetted local files only; a live GIF search
    on a big screen at a public stall will eventually show something you cannot
    defend.
