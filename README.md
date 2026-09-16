@@ -100,9 +100,9 @@ tongue out, open mouth with teeth, and closed red lips.
 |-----|------|
 | `F` | fullscreen |
 | `SPACE` | recalibrate the current face |
-| `V` | truth mode — real top-two margin instead of the confident % |
-| `T` | tongue overlay — shows the search box and every pixel it classified |
-| `D` | debug — live scores, calibration state, tongue fractions |
+| `V` | truth mode: real top-two margin instead of the confident % |
+| `T` | tongue overlay: shows the search box and every pixel it classified |
+| `D` | debug: live scores, calibration state, tongue fractions |
 | `1` `2` | switch demo |
 
 ## Pictionary keys
@@ -245,7 +245,7 @@ looked exactly like a dead backend. Both demos now count the failures, log the
 first few to the console, and put `DETECTION FAILING` plus the message on
 screen after ten in a row. Press `D` for the count.
 
-**Demo goes blank after a refresh** — check the black console window from
+**Demo goes blank after a refresh**: check the black console window from
 `start.bat` is still open. Closing it stops the server; an already-loaded
 page keeps running until it reloads.
 
@@ -258,7 +258,7 @@ page keeps running until it reloads.
 
 2. **Tune the tongue detector** with `T` held down, under the actual lighting.
    The constants live in the `TONGUE` object at the top of `mood.html`.
-   Test across a range of skin tones and lip colours — that part of the
+   Test across a range of skin tones and lip colours - that part of the
    pipeline is the one that can behave unevenly between people.
 
 3. **Write the verdicts.** `VERDICTS` at the top of `mood.html` is the whole
