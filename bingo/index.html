@@ -84,18 +84,6 @@ button { font:inherit; color:inherit; background:none; border:0; cursor:pointer;
         background:var(--lav); border-radius:1.2em .45em 1.1em .5em / .7em 1em .55em 1em; transform:rotate(-1.2deg);
         animation:fadeUp .6s ease-out .55s both; }
 
-/* doodles either side of the title, wide screens only */
-.deco { display:none; position:absolute; top:22px; width:230px; pointer-events:none; }
-.deco-l { left:-150px; } .deco-r { right:-150px; }
-.note { font-family:var(--script); font-weight:700; color:var(--navy); line-height:1.02; }
-.deco .note { font-size:30px; transform:rotate(-9deg); }
-.deco-r .note { text-align:right; }
-.note svg { width:.8em; height:.8em; vertical-align:-.1em; }
-.doodle { display:block; width:150px; height:150px; margin:14px auto 0; }
-.deco-l .doodle { color:#F4B731; transform:rotate(-10deg); }
-.deco-r .doodle { color:#5E97F3; transform:rotate(8deg); animation:float 4s ease-in-out infinite; }
-@media (min-width:1220px) { .deco { display:block; } }
-
 /* ---------- progress pill (sticky) ---------- */
 .prog {
   position:sticky; top:max(8px, env(safe-area-inset-top)); z-index:20;
@@ -302,7 +290,6 @@ dialog { border:0; padding:0; background:transparent; color:inherit; max-width:n
 @keyframes fadeUp { from { opacity:0; transform:translateY(10px); } }
 @keyframes fadeIn { from { opacity:0; } }
 @keyframes fadeOut { to { opacity:0; } }
-@keyframes float { 50% { transform:rotate(4deg) translateY(-8px); } }
 @keyframes bump { 40% { transform:scale(1.45); color:#D93A72; } }
 @keyframes cellIn { from { opacity:0; transform:translateY(14px) scale(.85); } }
 @keyframes pop {
@@ -606,15 +593,6 @@ dialog { border:0; padding:0; background:transparent; color:inherit; max-width:n
 
 <div class="wrap">
   <header class="hero">
-    <div class="deco deco-l" aria-hidden="true">
-      <p class="note">New people<br>Same interests<br>Bigger ideas <svg><use href="#heart"/></svg></p>
-      <svg class="doodle" viewBox="0 0 64 64"><use href="#i-hack"/></svg>
-    </div>
-    <div class="deco deco-r" aria-hidden="true">
-      <p class="note">AI + Engineering<br>+ Good Vibes <svg><use href="#heart"/></svg></p>
-      <svg class="doodle" viewBox="0 0 64 64"><use href="#i-bot"/></svg>
-    </div>
-
     <h1 class="title" aria-label="AISOC Meet and Greet Bingo">
       <span class="t-bingo" aria-hidden="true">
         <svg class="zap l" viewBox="0 0 20 30"><path d="M17 4L4 9M18 15H3M17 26L4 21" stroke="currentColor" stroke-width="3.4" stroke-linecap="round"/></svg>
