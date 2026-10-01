@@ -1,0 +1,1213 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<script>
+  // Relative URLs below need /bingo/, not /bingo. Hosts normally redirect; this covers the ones that do not.
+  if (!/\/$|\.html?$/i.test(location.pathname)) location.replace(location.pathname + "/" + location.search + location.hash);
+</script>
+<title>AISOC Meet &amp; Greet Bingo</title>
+<meta name="description" content="Find someone who... Tap a square, write their name, fill the card.">
+<meta property="og:title" content="AISOC Meet & Greet Bingo">
+<meta property="og:description" content="New people, same interests, bigger ideas. Find someone for all 25 squares.">
+<meta name="theme-color" content="#FBF8F1">
+<link rel="icon" href="../media/aisoc-logo.png">
+<link rel="apple-touch-icon" href="../media/aisoc-logo.png">
+<link rel="preload" href="fonts/fredoka-700.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/patrick-hand.woff2" as="font" type="font/woff2" crossorigin>
+<style>
+/* ==========================================================================
+   AISOC Meet & Greet Bingo - the poster, made tappable.
+
+   One self-contained page: no modules, no CDN, fonts vendored in fonts/.
+   Progress lives in localStorage so a phone that reloads the tab (they do,
+   constantly, in a busy hall) keeps the card. Nothing leaves the device.
+   ========================================================================== */
+/* Fredoka is the static 600/700 cut with one glyph edited: its bold B has a single open counter,
+   which read oddly at the front of BINGO, so the middle bar now meets the stem as on the poster. */
+@font-face { font-family:"Fredoka"; src:url(fonts/fredoka-600.woff2) format("woff2"); font-weight:500 600; font-display:swap; }
+@font-face { font-family:"Fredoka"; src:url(fonts/fredoka-700.woff2) format("woff2"); font-weight:700; font-display:swap; }
+@font-face { font-family:"Patrick Hand"; src:url(fonts/patrick-hand.woff2) format("woff2"); font-display:swap; }
+@font-face { font-family:"Caveat"; src:url(fonts/caveat.woff2) format("woff2"); font-weight:600 700; font-display:swap; }
+
+:root {
+  color-scheme: light;
+  --navy:#1F2350; --navy-2:#4A4F7A; --cream:#FBF8F1; --lav:#DDD5FA;
+  --display:"Fredoka","Baloo 2",ui-rounded,system-ui,sans-serif;
+  --hand:"Patrick Hand","Comic Sans MS",ui-rounded,system-ui,sans-serif;
+  --script:"Caveat","Patrick Hand",cursive;
+  --gut:10px; --gap:8px;
+  --spring:cubic-bezier(.34,1.56,.5,1);
+}
+* { box-sizing:border-box; margin:0; padding:0; }
+[hidden] { display:none !important; }
+html { -webkit-text-size-adjust:100%; text-size-adjust:100%; }
+html.modal { overflow:hidden; }
+body {
+  min-height:100vh; background:var(--cream); color:var(--navy);
+  font-family:var(--hand); overflow-x:hidden;
+  padding:0 max(var(--gut), env(safe-area-inset-right)) calc(28px + env(safe-area-inset-bottom)) max(var(--gut), env(safe-area-inset-left));
+  -webkit-tap-highlight-color:transparent;
+}
+/* soft colour blobs in the corners, like the poster */
+body::before, body::after {
+  content:""; position:fixed; z-index:-1; pointer-events:none; border-radius:50%; filter:blur(10px);
+}
+body::before { width:min(70vw,520px); aspect-ratio:1; left:-22vw; top:-14vw;
+  background:radial-gradient(closest-side, rgba(150,190,245,.55), rgba(150,190,245,0)); }
+body::after { width:min(80vw,620px); aspect-ratio:1; right:-30vw; bottom:-20vw;
+  background:radial-gradient(closest-side, rgba(196,181,253,.5), rgba(196,181,253,0)); }
+.sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+button { font:inherit; color:inherit; background:none; border:0; cursor:pointer; touch-action:manipulation; }
+.wrap { max-width:860px; margin:0 auto; position:relative; }
+
+/* ---------- colour themes: one per square ---------- */
+.t-blue   { --soft:#E6F0FC; --line:#A3C4EF; --badge:#3E7BE6; --c1:#5E97F3; --c2:#3A72DB; }
+.t-pink   { --soft:#FDE8EF; --line:#F3AEC5; --badge:#E2457C; --c1:#F36C9C; --c2:#D93A72; }
+.t-green  { --soft:#E4F6EC; --line:#9AD8B2; --badge:#1F9D68; --c1:#31B880; --c2:#17915F; }
+.t-purple { --soft:#EFEBFC; --line:#BFB2F0; --badge:#7A55E3; --c1:#9576F1; --c2:#6F4AD9; }
+.t-orange { --soft:#FEF0DE; --line:#F6C88C; --badge:#EE8320; --c1:#F79832; --c2:#D9680A; }
+.t-yellow { --soft:#FEF6DA; --line:#F1D583; --badge:#EE8320; --c1:#F2B62A; --c2:#CC8C06; }
+
+/* ---------- header ---------- */
+.hero { text-align:center; padding-top:calc(18px + env(safe-area-inset-top)); position:relative; }
+.title { font-family:var(--display); font-weight:700; line-height:.92; letter-spacing:-.015em; }
+.title > span { display:block; }
+.t-aisoc { font-size:clamp(44px, 12.5vw, 98px); }
+.o-bot { display:inline-block; width:1.06em; height:1.06em; vertical-align:-.2em; margin:0 -.07em 0 -.05em;
+         transform-origin:50% 80%; animation:botNod 4.5s ease-in-out 1.2s infinite; }
+.t-mg { font-size:clamp(31px, 9.2vw, 70px); margin-top:.04em; }
+.t-bingo { font-size:clamp(66px, 19.5vw, 142px); display:flex; justify-content:center; align-items:center;
+           gap:.015em; margin-top:.02em; line-height:1; }
+.t-bingo b { display:inline-block; font-weight:700; color:var(--lc); text-shadow:0 .05em 0 var(--ls);
+             animation:letterIn .75s var(--spring) calc(.15s + var(--i) * .08s) both; }
+.zap { width:.34em; height:.5em; flex:none; color:var(--navy); }
+.zap.l { margin-right:.06em; } .zap.r { margin-left:.06em; transform:scaleX(-1); }
+.find { display:inline-block; margin-top:14px; padding:.1em .9em .16em; font-size:clamp(21px, 5.8vw, 34px);
+        background:var(--lav); border-radius:1.2em .45em 1.1em .5em / .7em 1em .55em 1em; transform:rotate(-1.2deg);
+        animation:fadeUp .6s ease-out .55s both; }
+
+/* doodles either side of the title, wide screens only */
+.deco { display:none; position:absolute; top:22px; width:230px; pointer-events:none; }
+.deco-l { left:-150px; } .deco-r { right:-150px; }
+.note { font-family:var(--script); font-weight:700; color:var(--navy); line-height:1.02; }
+.deco .note { font-size:30px; transform:rotate(-9deg); }
+.deco-r .note { text-align:right; }
+.note svg { width:.8em; height:.8em; vertical-align:-.1em; }
+.doodle { display:block; width:150px; height:150px; margin:14px auto 0; }
+.deco-l .doodle { color:#F4B731; transform:rotate(-10deg); }
+.deco-r .doodle { color:#5E97F3; transform:rotate(8deg); animation:float 4s ease-in-out infinite; }
+@media (min-width:1220px) { .deco { display:block; } }
+
+/* ---------- progress pill (sticky) ---------- */
+.prog {
+  position:sticky; top:max(8px, env(safe-area-inset-top)); z-index:20;
+  max-width:460px; margin:16px auto 18px; height:44px; padding:0 8px 0 16px;
+  display:flex; align-items:center; gap:12px;
+  background:rgba(255,255,255,.86); -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px);
+  border:2px solid #E6E0F8; border-radius:999px; box-shadow:0 8px 24px -14px rgba(31,35,80,.45);
+  font-family:var(--display); font-weight:600; font-size:15px; white-space:nowrap;
+}
+.prog-n b { font-size:20px; font-weight:700; display:inline-block; min-width:1.2ch; text-align:right; }
+.prog-n b.bump { animation:bump .5s var(--spring); }
+.prog-n span { color:var(--navy-2); }
+.bar { flex:1; height:12px; border-radius:99px; background:#EFEAFB; overflow:hidden; position:relative; }
+.bar i { position:absolute; inset:0; border-radius:inherit;
+         background:linear-gradient(90deg,#F2558A,#F7A23B,#F5C518,#31B880,#4D8EF0,#8B6CF0);
+         clip-path:inset(0 calc((1 - var(--p, 0)) * 100%) 0 0 round 99px);
+         transition:clip-path .7s var(--spring); }
+.prog-done { display:none; flex:1; align-items:center; justify-content:space-between; gap:8px; min-width:0; }
+.prog.done { background:linear-gradient(90deg,#F2558A,#F7A23B,#31B880,#4D8EF0,#8B6CF0); border-color:#fff; color:#fff; }
+.prog.done .prog-n, .prog.done .bar { display:none; }
+.prog.done .prog-done { display:flex; }
+.prog-done span { overflow:hidden; text-overflow:ellipsis; text-shadow:0 1px 0 rgba(0,0,0,.18); }
+.replay { flex:none; height:32px; padding:0 14px; border-radius:99px; background:#fff; color:var(--navy);
+          font-family:var(--display); font-weight:700; font-size:14px; }
+.replay:active { transform:scale(.94); }
+.hint { text-align:center; font-size:17px; color:var(--navy-2); margin:-8px 0 14px; animation:fadeUp .5s ease-out 1s both; }
+
+/* ---------- the grid ---------- */
+.grid { display:grid; grid-template-columns:repeat(5, minmax(0, 1fr)); gap:var(--gap); }
+.cell {
+  position:relative; display:block; width:100%; aspect-ratio:1 / 1.45; text-align:center;
+  border-radius:12px; -webkit-user-select:none; user-select:none;
+  transition:transform .18s ease;
+}
+.box {
+  position:absolute; inset:0; container-type:inline-size; display:flex; flex-direction:column; align-items:center;
+  padding:9px 3px 5px; border-radius:inherit; border:2px solid var(--line); background:var(--soft);
+  box-shadow:0 3px 0 -1px var(--line); transition:box-shadow .3s;
+}
+.cell:focus-visible { outline:3px solid var(--navy); outline-offset:3px; }
+.cell:active { transform:scale(.95); }
+@media (hover:hover) { .cell:hover { transform:translateY(-3px) rotate(-.6deg); } .cell:active { transform:scale(.95); } }
+
+/* the ink: a circle of colour that floods out from where you tapped */
+.ink { position:absolute; inset:-2px; border-radius:inherit; pointer-events:none;
+       background:linear-gradient(150deg, var(--c1), var(--c2));
+       clip-path:circle(0 at var(--x, 50%) var(--y, 50%));
+       transition:clip-path .42s cubic-bezier(.5,0,.75,0); }
+.filled .ink { clip-path:circle(150% at var(--x, 50%) var(--y, 50%)); transition:clip-path .62s cubic-bezier(.2,.7,.2,1); }
+.filled .box { box-shadow:0 8px 16px -8px var(--c2); }
+
+/* number badge, a sticker on the corner that flips to a tick when found */
+/* cqw sizes track the square; the vw value before each is for browsers without container units (iOS 15) */
+.num { position:absolute; z-index:2; top:-7px; left:-7px; width:clamp(17px, 3.8vw, 30px); width:clamp(17px, 21cqw, 30px); aspect-ratio:1;
+       transform-style:preserve-3d; transition:transform .5s var(--spring); }
+.num i { position:absolute; inset:0; border-radius:50%; display:flex; align-items:center; justify-content:center;
+         font:700 clamp(10px, 2.3vw, 17px)/1 var(--display); font:700 clamp(10px, 12.5cqw, 17px)/1 var(--display); font-style:normal; color:#fff;
+         backface-visibility:hidden; -webkit-backface-visibility:hidden;
+         border:2px solid #fff; box-shadow:0 2px 4px rgba(31,35,80,.2); }
+.num .f { background:var(--badge); }
+.num .b { background:#fff; transform:rotateY(180deg); border-color:var(--c2); }
+.num .b svg { width:66%; height:66%; fill:none; stroke:var(--c2); stroke-width:3.4; stroke-linecap:round; stroke-linejoin:round; }
+.filled .num { transform:rotateY(180deg); transition-delay:.28s; }
+
+.q { position:relative; font-size:clamp(9.5px, 2.8vw, 19px); font-size:clamp(9.5px, 15.5cqw, 19px); line-height:1.1; color:var(--navy);
+     hyphens:auto; -webkit-hyphens:auto; overflow-wrap:break-word; max-width:100%; flex:none;
+     transition:color .25s; }
+.filled .q { color:#fff; transition-delay:.12s; text-shadow:0 1px 0 rgba(0,0,0,.12); }
+.slot { position:relative; flex:1 1 0; min-height:0; width:100%; display:grid; place-items:center; }
+.art, .who { grid-area:1 / 1; }
+.art { width:min(84%, 78px); height:100%; max-height:78px; color:var(--badge); overflow:visible;
+       transition:transform .3s ease, opacity .2s; }
+.filled .art { transform:scale(.3) rotate(-25deg); opacity:0; }
+.who { width:100%; height:100%; display:flex; align-items:center; justify-content:center; overflow:hidden; opacity:0;
+       transition:opacity .15s; }
+.filled .who { opacity:1; transition-delay:.22s; }
+.name { display:block; max-width:100%; font-family:var(--script); font-weight:700; line-height:.98; color:#fff;
+        text-shadow:0 1px 0 rgba(0,0,0,.15); overflow-wrap:normal; word-break:normal;
+        clip-path:inset(0 100% 0 0); transition:clip-path .2s; }
+.filled .name { clip-path:inset(-20% -10% -20% -10%); transition:clip-path .55s cubic-bezier(.6,.1,.3,1) .26s; }
+.cell.rewrite .name { animation:write .55s cubic-bezier(.6,.1,.3,1) .1s backwards; }
+
+.cell.popping { z-index:3; animation:pop .62s ease-out; }
+.cell.wave { z-index:3; animation:wave .6s var(--spring) var(--d, 0ms) both; }
+.grid.intro .cell { animation:cellIn .5s var(--spring) calc(.35s + var(--n) * 22ms) backwards; }
+.grid.still * { transition:none !important; }
+
+@media (min-width:480px) { :root { --gut:14px; --gap:10px; } .cell { aspect-ratio:1 / 1.3; } }
+@media (min-width:700px) {
+  :root { --gut:24px; --gap:14px; }
+  .cell { aspect-ratio:1 / 1.08; border-radius:16px; }
+  .box { padding:15px 8px 9px; }
+  .num { top:-9px; left:-9px; }
+}
+
+/* ---------- footer ---------- */
+.foot { margin-top:30px; display:grid; gap:18px; }
+.rules { background:var(--lav); border-radius:22px 10px 24px 12px / 12px 22px 10px 24px;
+         padding:16px 18px 16px 22px; font-size:18px; line-height:1.3; }
+.rules h2 { font:700 19px/1 var(--display); letter-spacing:.02em; text-transform:uppercase; margin-bottom:8px; }
+.rules ul { padding-left:18px; }
+.rules li + li { margin-top:4px; }
+.rules li::marker { color:#7A55E3; }
+.rules svg { width:1.1em; height:1.1em; vertical-align:-.18em; }
+.foot-notes { display:flex; justify-content:space-between; align-items:center; padding:0 6px; }
+.foot-notes .note { font-size:28px; }
+.foot-notes .n1 { transform:rotate(-8deg); }
+.foot-notes .n2 { transform:rotate(-12deg); font-size:36px; text-align:center; }
+.foot-act { display:flex; justify-content:center; align-items:center; gap:18px; flex-wrap:wrap;
+            font-family:var(--display); font-weight:600; font-size:14px; color:var(--navy-2); }
+.foot-act a { color:#6F4AD9; text-decoration:none; }
+.link-btn { padding:8px 12px; border-radius:99px; border:2px dashed #C9C2E6; font-weight:600; font-family:var(--display);
+            font-size:14px; color:var(--navy-2); transition:background .2s, color .2s, border-color .2s; }
+.link-btn.armed { background:#FDE8EF; border-color:#E2457C; border-style:solid; color:#C02D62; }
+@media (min-width:860px) {
+  .foot { grid-template-columns:1fr minmax(0, 560px) 1fr; align-items:center; }
+  .foot-notes { display:contents; }
+  .foot-notes .n1 { grid-column:1; grid-row:1; justify-self:start; }
+  .foot-notes .n2 { grid-column:3; grid-row:1; justify-self:end; }
+  .rules { grid-column:2; grid-row:1; }
+  .foot-act { grid-column:1 / -1; }
+}
+
+/* ---------- name sheet ---------- */
+dialog { border:0; padding:0; background:transparent; color:inherit; max-width:none; max-height:none; }
+.sheet { position:fixed; inset:auto 0 var(--kb, 0px) 0; margin:0; width:100%; }
+.sheet::backdrop { background:rgba(31,35,80,.38); -webkit-backdrop-filter:blur(3px); backdrop-filter:blur(3px); }
+.sheet[open] { animation:sheetUp .36s cubic-bezier(.2,.9,.3,1.08); }
+.sheet[open]::backdrop { animation:fadeIn .3s ease-out; }
+.sheet.closing { animation:sheetDown .2s ease-in forwards; }
+.sheet.closing::backdrop { animation:fadeOut .2s ease-in forwards; }
+.sheet-in { display:block; background:#fff; border-radius:26px 26px 0 0; padding:10px 18px calc(16px + env(safe-area-inset-bottom));
+            box-shadow:0 -10px 40px -10px rgba(31,35,80,.35); }
+.grab { display:block; width:44px; height:5px; border-radius:9px; background:#E2DEEF; margin:0 auto 12px; }
+.sheet-top { display:flex; gap:14px; align-items:center; }
+.sheet-art { position:relative; flex:none; width:76px; height:76px; border-radius:20px; background:var(--soft);
+             border:2px solid var(--line); display:grid; place-items:center; }
+.sheet-art svg { width:60px; height:60px; color:var(--badge); overflow:visible; }
+.sheet[open] .sheet-art svg { animation:wiggle .7s ease-in-out .2s; }
+.sheet-num { position:absolute; top:-8px; left:-8px; width:26px; height:26px; border-radius:50%; background:var(--badge);
+             color:#fff; border:2px solid #fff; display:grid; place-items:center; font:700 13px/1 var(--display); }
+.sheet-kick { font-size:16px; color:var(--navy-2); }
+.sheet-q { font:600 clamp(20px, 5.6vw, 24px)/1.12 var(--display); }
+.sheet-label { display:block; margin:16px 0 6px; font:600 13px/1 var(--display); letter-spacing:.08em; text-transform:uppercase; color:var(--navy-2); }
+.sheet-input { display:block; width:100%; height:56px; padding:0 16px; border-radius:16px; border:2px solid #DCD6EE; background:#FBFAFF;
+               font:700 28px/1 var(--script); color:var(--navy); outline:none; transition:border-color .2s, box-shadow .2s; }
+.sheet-input::placeholder { color:#AFA9C9; font-weight:600; }
+.sheet-input:focus { border-color:var(--c2); box-shadow:0 0 0 4px color-mix(in srgb, var(--c2) 18%, transparent); }
+.sheet-input.shake { animation:shake .42s; }
+.sheet-err { min-height:22px; padding-top:6px; font-size:16px; line-height:1.2; color:#C02D62; }
+.sheet-btns { display:flex; gap:8px; align-items:center; margin-top:4px; }
+.grow { flex:1; }
+.btn-main, .btn-ghost { height:48px; padding:0 20px; border-radius:16px; font:700 17px/1 var(--display); transition:transform .12s, background .2s; }
+.btn-main { background:var(--navy); color:#fff; box-shadow:0 4px 0 #0E1030; }
+.btn-main:active { transform:translateY(3px); box-shadow:0 1px 0 #0E1030; }
+.btn-main:focus-visible, .btn-ghost:focus-visible, .replay:focus-visible, .link-btn:focus-visible { outline:3px solid #9576F1; outline-offset:3px; }
+.btn-ghost { color:var(--navy-2); }
+.btn-ghost:active { transform:scale(.95); }
+.btn-ghost.danger { color:#C02D62; padding:0 10px; }
+@media (min-width:600px) {
+  .sheet { inset:0; margin:auto; width:min(460px, calc(100% - 32px)); height:fit-content; }
+  .sheet-in { border-radius:26px; padding:22px 22px 20px; }
+  .grab { display:none; }
+  .sheet[open] { animation:popIn .32s var(--spring); }
+  .sheet.closing { animation:popOut .18s ease-in forwards; }
+}
+
+/* ---------- fill effects (particles live above everything except dialogs) ---------- */
+#fx { position:fixed; inset:0; pointer-events:none; z-index:40; overflow:hidden; }
+#fx i { position:absolute; display:block; }
+#fx .ring { border-radius:50%; border:3px solid var(--c); }
+#fx .dot { border-radius:50%; }
+#fx .bar2 { border-radius:2px; }
+#fx .star { clip-path:polygon(50% 0,61% 35%,98% 35%,68% 57%,79% 91%,50% 70%,21% 91%,32% 57%,2% 35%,39% 35%); }
+
+.toast { position:fixed; left:50%; bottom:calc(18px + env(safe-area-inset-bottom)); z-index:45; transform:translate(-50%, 140%);
+         background:var(--navy); color:#fff; font:600 16px/1 var(--display); padding:12px 18px; border-radius:99px; white-space:nowrap;
+         box-shadow:0 10px 30px -10px rgba(31,35,80,.6); opacity:0; transition:transform .35s var(--spring), opacity .25s; pointer-events:none; }
+.toast.show { transform:translate(-50%, 0); opacity:1; }
+
+/* ---------- full house! ---------- */
+.win { position:fixed; inset:0; width:100%; height:100%; margin:0; overflow:hidden;
+       display:none; align-items:center; justify-content:center; padding:24px 18px; }
+.win[open] { display:flex; }
+.win::backdrop { background:radial-gradient(circle at 50% 42%, #47318F 0%, #22165A 55%, #140C38 100%); }
+.win[open]::backdrop { animation:fadeIn .4s ease-out; }
+.win.out { animation:fadeOut .26s ease-in forwards; }
+.win.out::backdrop { animation:fadeOut .26s ease-in forwards; }
+.rays { position:absolute; left:50%; top:44%; width:240vmax; height:240vmax; margin:-120vmax 0 0 -120vmax; pointer-events:none;
+        background:repeating-conic-gradient(rgba(255,255,255,.075) 0 9deg, rgba(255,255,255,0) 9deg 18deg);
+        -webkit-mask:radial-gradient(closest-side, #000 8%, transparent 62%); mask:radial-gradient(closest-side, #000 8%, transparent 62%);
+        animation:spin 40s linear infinite; }
+#confetti { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; z-index:3; }
+.win-card { position:relative; z-index:2; width:min(420px, 100%); text-align:center; color:var(--navy);
+            background:var(--cream); border:3px solid var(--navy); border-radius:30px; padding:0 22px 22px;
+            box-shadow:0 10px 0 var(--navy), 0 30px 80px rgba(0,0,0,.45); margin-top:70px; }
+.win.play .win-card { animation:cardIn .7s var(--spring) .1s both; }
+.mascot { display:block; width:150px; height:150px; margin:-96px auto -4px; overflow:visible; }
+.win.play .mascot { animation:mascotIn .8s var(--spring) .45s both; }
+.m-bob { animation:bob 2.2s ease-in-out 1.3s infinite; }
+.m-wave { transform-origin:96px 100px; animation:waveArm 1.1s ease-in-out infinite; }
+.m-eyes { transform-box:fill-box; transform-origin:center; animation:blink 3.4s infinite; }
+.win-title { font:700 clamp(58px, 17vw, 84px)/1 var(--display); display:flex; justify-content:center; gap:.02em; }
+.win-title b { display:inline-block; color:var(--lc); text-shadow:0 .05em 0 var(--ls); }
+.win.play .win-title b { animation:drop .7s var(--spring) calc(.55s + var(--i) * .09s) both, hop 2.6s ease-in-out calc(1.6s + var(--i) * .12s) infinite; }
+.win-lead { font:600 21px/1.2 var(--display); margin-top:8px; }
+.win-sub { font-size:18px; line-height:1.3; color:var(--navy-2); margin-top:8px; }
+.win-time { display:inline-block; margin-top:12px; padding:6px 14px; border-radius:99px; background:var(--lav);
+            font:600 14px/1 var(--display); letter-spacing:.04em; }
+.win-card .btn-main { width:100%; margin-top:16px; height:54px; font-size:19px; }
+.win.play .win-lead, .win.play .win-sub, .win.play .win-time, .win.play .btn-main { animation:fadeUp .5s ease-out 1.15s both; }
+
+/* ---------- keyframes ---------- */
+@keyframes letterIn { from { opacity:0; transform:translateY(-.5em) scale(.6) rotate(-14deg); } to { opacity:1; transform:rotate(var(--r, 0deg)); } }
+@keyframes fadeUp { from { opacity:0; transform:translateY(10px); } }
+@keyframes fadeIn { from { opacity:0; } }
+@keyframes fadeOut { to { opacity:0; } }
+@keyframes botNod { 0%, 84%, 100% { transform:rotate(0); } 88% { transform:rotate(-12deg); } 93% { transform:rotate(9deg); } 97% { transform:rotate(-3deg); } }
+@keyframes float { 50% { transform:rotate(4deg) translateY(-8px); } }
+@keyframes bump { 40% { transform:scale(1.45); color:#D93A72; } }
+@keyframes cellIn { from { opacity:0; transform:translateY(14px) scale(.85); } }
+@keyframes pop {
+  0% { transform:scale(1); } 22% { transform:scale(.86) rotate(-3deg); } 52% { transform:scale(1.09) rotate(2deg); }
+  76% { transform:scale(.97) rotate(-.6deg); } 100% { transform:scale(1); }
+}
+@keyframes wave { 0%, 100% { transform:none; } 40% { transform:translateY(-16%) scale(1.07) rotate(var(--rot, 0deg)); } }
+@keyframes write { from { clip-path:inset(0 100% 0 0); } }
+@keyframes sheetUp { from { transform:translateY(100%); } }
+@keyframes sheetDown { to { transform:translateY(100%); } }
+@keyframes popIn { from { opacity:0; transform:scale(.88) translateY(12px); } }
+@keyframes popOut { to { opacity:0; transform:scale(.94) translateY(8px); } }
+@keyframes wiggle { 25% { transform:rotate(-10deg) scale(1.08); } 50% { transform:rotate(8deg) scale(1.08); } 75% { transform:rotate(-4deg); } }
+@keyframes shake { 20%, 60% { transform:translateX(-7px); } 40%, 80% { transform:translateX(7px); } }
+@keyframes spin { to { transform:rotate(1turn); } }
+@keyframes cardIn { from { opacity:0; transform:scale(.6) translateY(40px) rotate(-4deg); } }
+@keyframes mascotIn { from { opacity:0; transform:translateY(60px) scale(.6); } }
+@keyframes bob { 50% { transform:translateY(-7px); } }
+@keyframes waveArm { 50% { transform:rotate(-22deg); } }
+@keyframes blink { 0%, 90%, 100% { transform:scaleY(1); } 94% { transform:scaleY(.1); } }
+@keyframes drop { from { opacity:0; transform:translateY(-120%) scale(.7) rotate(-20deg); } }
+@keyframes hop { 0%, 30%, 100% { transform:none; } 12% { transform:translateY(-12%) rotate(-4deg); } }
+
+@media (prefers-reduced-motion:reduce) {
+  *, *::before, *::after { animation-duration:.01ms !important; animation-iteration-count:1 !important;
+                           animation-delay:0s !important; transition-duration:.01ms !important; transition-delay:0s !important; }
+}
+</style>
+</head>
+<body>
+
+<!-- ======================= icon sprite =======================
+     Every icon is drawn on a 64x64 grid with a 3px navy outline. Side
+     "sparks" take the square's own colour through currentColor. Kept out of
+     the layout with zero size rather than display:none, which would break the
+     gradient that the MATLAB icon uses. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <linearGradient id="gMat" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#F9B233"/><stop offset="1" stop-color="#E2452B"/></linearGradient>
+  </defs>
+
+  <symbol id="spk" viewBox="0 0 64 64"><path d="M3.5 21l4 2.5M2.5 29h5M3.5 37l4-2.5M60.5 21l-4 2.5M61.5 29h-5M60.5 37l-4-2.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></symbol>
+  <symbol id="spkl" viewBox="0 0 64 64"><path d="M3.5 21l4 2.5M2.5 29h5M3.5 37l4-2.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></symbol>
+
+  <symbol id="lap" viewBox="0 0 64 64">
+    <g stroke="#1F2350" stroke-width="3" stroke-linejoin="round" stroke-linecap="round">
+      <rect x="15" y="14" width="34" height="25" rx="3.5" fill="#E9EEFB"/>
+      <rect x="19" y="18" width="26" height="17" rx="1.5" fill="#262B5A" stroke="none"/>
+      <path d="M10 42h44l-2.6 5a3 3 0 0 1-2.7 1.6H15.3a3 3 0 0 1-2.7-1.6z" fill="#E9EEFB"/>
+      <path d="M28 45h8" stroke-width="2.5"/>
+    </g>
+  </symbol>
+
+  <symbol id="robo" viewBox="0 0 64 64">
+    <g stroke="#1F2350" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M32 14V9"/>
+      <circle cx="32" cy="6.5" r="3" fill="#8B6CF0"/>
+      <rect x="7.5" y="27" width="7" height="15" rx="3.5" fill="#A9C8F5"/>
+      <rect x="49.5" y="27" width="7" height="15" rx="3.5" fill="#A9C8F5"/>
+      <rect x="12" y="14" width="40" height="38" rx="16" fill="#fff"/>
+      <rect x="17.5" y="21" width="29" height="23" rx="10" fill="#1F2350"/>
+      <path d="M23.5 31.5q3-3.5 6 0M34.5 31.5q3-3.5 6 0M28.5 37q3.5 3 7 0" stroke="#8FE3FF" stroke-width="2.5" fill="none"/>
+    </g>
+  </symbol>
+
+  <symbol id="knot" viewBox="0 0 64 64">
+    <g fill="none" stroke="currentColor" stroke-width="3.4" stroke-linejoin="round">
+      <rect id="kp" x="26" y="9" width="12" height="26" rx="6" transform="rotate(60 32 22)"/>
+      <use href="#kp" transform="rotate(60 32 32)"/><use href="#kp" transform="rotate(120 32 32)"/>
+      <use href="#kp" transform="rotate(180 32 32)"/><use href="#kp" transform="rotate(240 32 32)"/>
+      <use href="#kp" transform="rotate(300 32 32)"/>
+    </g>
+  </symbol>
+
+  <symbol id="heart" viewBox="0 0 24 24"><path d="M12 20.5s-7.5-4.6-9.6-9.2C.9 8 3 4 6.9 4c2.2 0 3.8 1.3 5.1 3.2C13.3 5.3 14.9 4 17.1 4 21 4 23.1 8 21.6 11.3 19.5 15.9 12 20.5 12 20.5z" fill="none" stroke="#1F2350" stroke-width="2.2" stroke-linejoin="round"/></symbol>
+
+  <!-- 1 -->
+  <symbol id="i-hack" viewBox="0 0 64 64">
+    <use href="#spk" width="64" height="64"/><use href="#lap" width="64" height="64"/>
+    <path d="M27.5 22.5l-4 4 4 4M36.5 22.5l4 4-4 4M33.5 21l-3 11" fill="none" stroke="#9CC9FF" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+  <!-- 2 -->
+  <symbol id="i-arm" viewBox="0 0 64 64">
+    <g stroke="#1F2350" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <path d="M25 47l-4-16M21 31l16-11" stroke-width="10.5"/>
+      <path d="M25 47l-4-16M21 31l16-11" stroke="#B9D2F7" stroke-width="4.5"/>
+      <rect x="11" y="47" width="28" height="9" rx="3" fill="#8DB4EE"/>
+      <circle cx="21" cy="31" r="5" fill="#5B8DEF"/>
+      <circle cx="37" cy="20" r="4.5" fill="#5B8DEF"/>
+      <path d="M40 16.5c3.5-5 10-5 12.5-.5l-3.5 2M40 23.5c3.5 5 10 5 12.5.5l-3.5-2"/>
+    </g>
+  </symbol>
+  <!-- 3 -->
+  <symbol id="i-idea" viewBox="0 0 64 64">
+    <path d="M7 25h5M52 25h5M12 9.5l3.5 3.5M52 9.5l-3.5 3.5" stroke="#F4B731" stroke-width="2.8" stroke-linecap="round"/>
+    <g stroke="#1F2350" stroke-width="3" stroke-linejoin="round" stroke-linecap="round">
+      <path d="M32 8a15.5 15.5 0 0 0-9 28.2c1.7 1.3 2.8 3.2 2.8 5.3V44h12.4v-2.5c0-2.1 1.1-4 2.8-5.3A15.5 15.5 0 0 0 32 8z" fill="#FFD84D"/>
+      <rect x="25" y="44" width="14" height="5" rx="1.5" fill="#C9D3E8"/>
+      <path d="M27.5 49h9l-.9 3.4a2 2 0 0 1-1.9 1.6h-3.4a2 2 0 0 1-1.9-1.6z" fill="#C9D3E8"/>
+    </g>
+    <g stroke="#1F2350" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M32 15.5c-2-2.2-6.6-1.6-7.1 1.6-2.6.4-3.6 3.6-2 5.4-1.2 2.4.6 5.3 3.3 5 .8 2.3 4.1 2.8 5.8 1z" fill="#F7A3C7"/>
+      <path d="M32 15.5c2-2.2 6.6-1.6 7.1 1.6 2.6.4 3.6 3.6 2 5.4 1.2 2.4-.6 5.3-3.3 5-.8 2.3-4.1 2.8-5.8 1z" fill="#F7A3C7"/>
+      <path d="M32 15.5v13.2M26.8 19.8c1.5.4 2.6 1.6 2.6 3M37.2 19.8c-1.5.4-2.6 1.6-2.6 3" fill="none"/>
+    </g>
+  </symbol>
+  <!-- 4 -->
+  <symbol id="i-py" viewBox="0 0 64 64">
+    <use href="#spk" width="64" height="64"/>
+    <g stroke="#1F2350" stroke-width="2.5" stroke-linejoin="round">
+      <path d="M31.5 8c-9 0-9.5 4-9.5 6v5h10v2H17c-4.5 0-8 3.5-8 10.5S12 42 16.5 42H20v-6c0-4 3.5-7.5 7.5-7.5h10c3.5 0 6-2.5 6-6V14c0-3.5-3-6-6.5-6z" fill="#3D7DD8"/>
+      <path d="M32.5 56c9 0 9.5-4 9.5-6v-5H32v-2h15c4.5 0 8-3.5 8-10.5S52 22 47.5 22H44v6c0 4-3.5 7.5-7.5 7.5h-10c-3.5 0-6 2.5-6 6V50c0 3.5 3 6 6.5 6z" fill="#FFD43B"/>
+    </g>
+    <circle cx="27" cy="13.5" r="2" fill="#fff"/><circle cx="37" cy="50.5" r="2" fill="#fff"/>
+  </symbol>
+  <!-- 5 -->
+  <symbol id="i-hate" viewBox="0 0 64 64">
+    <use href="#spk" width="64" height="64"/><use href="#lap" width="64" height="64"/>
+    <g fill="none" stroke="#FFB4C8" stroke-linecap="round"><path d="M27.5 24v.1M36.5 24v.1" stroke-width="3.4"/><path d="M27.5 31.5c2.8-2.6 6.2-2.6 9 0" stroke-width="2.4"/></g>
+    <path d="M30 10.5c-4 .5-5-4-1.5-5.5s7 1 5.5 4.5-6.5 1.5-5-2 6-3 7.5 0-1.5 4.5-4 3.5" fill="none" stroke="#1F2350" stroke-width="1.8" stroke-linecap="round"/>
+  </symbol>
+  <!-- 6 -->
+  <symbol id="i-note" viewBox="0 0 64 64">
+    <use href="#spkl" width="64" height="64"/>
+    <g stroke="#1F2350" stroke-width="3" stroke-linejoin="round" stroke-linecap="round">
+      <g transform="rotate(-8 30 34)">
+        <rect x="15" y="12" width="28" height="39" rx="3" fill="#fff"/>
+        <path d="M21 21h16M21 28h16M21 35h16M21 42h9" stroke="#9AA6C8" stroke-width="2.2"/>
+        <path d="M15 18h-3.5M15 26h-3.5M15 34h-3.5M15 42h-3.5" stroke-width="2.4"/>
+      </g>
+      <g transform="rotate(35 46 32)">
+        <rect x="42" y="8" width="8" height="5.5" rx="1.5" fill="#F7A3C7"/>
+        <rect x="42" y="13.5" width="8" height="28.5" fill="#FFC93C"/>
+        <path d="M42 42l4 8 4-8z" fill="#F7D9B5"/>
+      </g>
+    </g>
+  </symbol>
+  <!-- 7 -->
+  <symbol id="i-gh" viewBox="0 0 64 64">
+    <path transform="translate(12 12) scale(2.5)" fill="#1B1F3B" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+  </symbol>
+  <!-- 8 -->
+  <symbol id="i-sec" viewBox="0 0 64 64">
+    <g stroke="#1F2350" stroke-width="3" stroke-linejoin="round" stroke-linecap="round">
+      <path d="M32 6l19 6.5V27c0 13-8.5 22.5-19 27.5C21.5 49.5 13 40 13 27V12.5z" fill="#4C89EB"/>
+      <path d="M32 11.5l14 4.8V27c0 9.8-6 17.3-14 21.6z" fill="#76A7F3" stroke="none"/>
+      <path d="M26.5 29v-3.5a5.5 5.5 0 0 1 11 0V29" fill="none"/>
+      <rect x="23.5" y="29" width="17" height="13" rx="2.5" fill="#1F2350"/>
+    </g>
+    <circle cx="32" cy="34.2" r="1.9" fill="#fff"/><path d="M32 35v3" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>
+  </symbol>
+  <!-- 9 -->
+  <symbol id="i-gpt" viewBox="0 0 64 64">
+    <use href="#spk" width="64" height="64"/>
+    <use href="#knot" x="8" y="8" width="48" height="48" color="#10A37F"/>
+  </symbol>
+  <!-- 10 -->
+  <symbol id="i-broke" viewBox="0 0 64 64">
+    <use href="#spk" width="64" height="64"/><use href="#lap" width="64" height="64"/>
+    <circle cx="32" cy="26.5" r="6.5" fill="#F25C7F"/>
+    <path d="M29.3 23.8l5.4 5.4M34.7 23.8l-5.4 5.4" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>
+  </symbol>
+  <!-- 11 -->
+  <symbol id="i-cv" viewBox="0 0 64 64">
+    <path d="M9 19v-8h8M47 11h8v8M55 45v8h-8M17 53H9v-8" fill="none" stroke="#1F2350" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <g stroke="#1F2350" stroke-width="3" stroke-linejoin="round">
+      <path d="M13 32c5-7.5 11.5-11.5 19-11.5S46 24.5 51 32c-5 7.5-11.5 11.5-19 11.5S18 39.5 13 32z" fill="#fff"/>
+      <circle cx="32" cy="32" r="8" fill="#3D7DD8" stroke-width="2.5"/>
+    </g>
+    <circle cx="32" cy="32" r="3.6" fill="#1F2350"/><circle cx="34.6" cy="29.4" r="1.6" fill="#fff"/>
+  </symbol>
+  <!-- 12 -->
+  <symbol id="i-mat" viewBox="0 0 64 64">
+    <g stroke="#1F2350" stroke-width="2.6" stroke-linejoin="round">
+      <path d="M6 39l15.5-9 9 5.5L17.5 46z" fill="#3A78D6"/>
+      <path d="M21.5 30c7.5-4 12.5-22 18.5-22 6 0 10 20 18 32l-8 5c-4-6.5-7-14-9-22-3 9.5-7.5 16-10.5 13z" fill="url(#gMat)"/>
+    </g>
+  </symbol>
+  <!-- 13 -->
+  <symbol id="i-30s" viewBox="0 0 64 64">
+    <use href="#spkl" width="64" height="64"/>
+    <use href="#robo" x="5" y="17" width="44" height="44"/>
+    <path d="M41 5h14a6 6 0 0 1 6 6v6a6 6 0 0 1-6 6h-7l-6 5v-5h-1a6 6 0 0 1-6-6v-6a6 6 0 0 1 6-6z" fill="#fff" stroke="#1F2350" stroke-width="2.6" stroke-linejoin="round"/>
+    <g fill="#1F2350"><circle cx="42" cy="14" r="1.8"/><circle cx="48" cy="14" r="1.8"/><circle cx="54" cy="14" r="1.8"/></g>
+  </symbol>
+  <!-- 14 -->
+  <symbol id="i-job" viewBox="0 0 64 64">
+    <use href="#spk" width="64" height="64"/>
+    <g stroke="#1F2350" stroke-width="3" stroke-linejoin="round" stroke-linecap="round">
+      <rect x="12" y="11" width="40" height="30" rx="4" fill="#E9EEFB"/>
+      <rect x="16" y="15" width="32" height="22" rx="2" fill="#262B5A" stroke="none"/>
+      <path d="M28.5 41l-1.5 7h10l-1.5-7" fill="#E9EEFB"/>
+      <path d="M22 50h20"/>
+    </g>
+    <text x="32" y="31.6" text-anchor="middle" font-family="Fredoka, sans-serif" font-weight="700" font-size="14.5" fill="#fff">AI</text>
+  </symbol>
+  <!-- 15 -->
+  <symbol id="i-final" viewBox="0 0 64 64">
+    <use href="#spk" width="64" height="64"/>
+    <g stroke="#1F2350" stroke-width="3" stroke-linejoin="round">
+      <path d="M10 18a3 3 0 0 1 3-3h12l4 5h22a3 3 0 0 1 3 3v24a3 3 0 0 1-3 3H13a3 3 0 0 1-3-3z" fill="#F2B92B"/>
+      <path d="M10 26h44v21a3 3 0 0 1-3 3H13a3 3 0 0 1-3-3z" fill="#FFD95E"/>
+    </g>
+    <text x="32" y="40.5" text-anchor="middle" font-family="Patrick Hand, sans-serif" font-size="7" textLength="38" lengthAdjust="spacingAndGlyphs" fill="#1F2350">final_final_FINAL</text>
+  </symbol>
+  <!-- 16 -->
+  <symbol id="i-bot" viewBox="0 0 64 64">
+    <use href="#spk" width="64" height="64"/>
+    <use href="#robo" x="7" y="5" width="50" height="54"/>
+  </symbol>
+  <!-- 17 -->
+  <symbol id="i-group" viewBox="0 0 64 64">
+    <g stroke="#1F2350" stroke-width="3" stroke-linejoin="round">
+      <circle cx="18" cy="21" r="7" fill="#8C9AF4"/>
+      <path d="M5 46c0-8.5 5.5-14 13-14s13 5.5 13 14z" fill="#8C9AF4"/>
+      <circle cx="46" cy="21" r="7" fill="#8C9AF4"/>
+      <path d="M33 46c0-8.5 5.5-14 13-14s13 5.5 13 14z" fill="#8C9AF4"/>
+      <circle cx="32" cy="24" r="8.5" fill="#5A5FD9"/>
+      <path d="M16 52c0-10 7-16.5 16-16.5S48 42 48 52z" fill="#5A5FD9"/>
+    </g>
+    <g stroke="#E5484D" stroke-width="3.6"><circle cx="49" cy="47" r="10" fill="#fff"/><path d="M42 40l14 14"/></g>
+  </symbol>
+  <!-- 18 -->
+  <symbol id="i-pers" viewBox="0 0 64 64">
+    <use href="#spkl" width="64" height="64"/>
+    <use href="#robo" x="6" y="10" width="48" height="48"/>
+    <path d="M51 10c-1.6-3-6.5-2.4-6.5 1.4 0 3 3.6 5.6 6.5 7.6 2.9-2 6.5-4.6 6.5-7.6 0-3.8-4.9-4.4-6.5-1.4z" fill="#F472B6" stroke="#1F2350" stroke-width="2.2" stroke-linejoin="round"/>
+    <path d="M58 22l3.5-1.5M57 27.5h4" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+  </symbol>
+  <!-- 19 -->
+  <symbol id="i-wip" viewBox="0 0 64 64">
+    <g stroke="#1F2350" stroke-width="3" stroke-linejoin="round" stroke-linecap="round">
+      <rect x="6" y="11" width="44" height="34" rx="4" fill="#D8E8FF"/>
+      <path d="M6 19.5h44"/>
+      <path d="M24 27l-4.5 4.5L24 36M32 27l4.5 4.5L32 36M29.5 25.5l-3 12" stroke="#3D7DD8" stroke-width="2.6" fill="none"/>
+      <circle cx="47" cy="45" r="11" fill="#fff"/>
+      <path d="M47 39v6l4 2.5" stroke-width="2.6"/>
+    </g>
+    <g fill="#1F2350"><circle cx="11" cy="15.3" r="1.3"/><circle cx="15.5" cy="15.3" r="1.3"/><circle cx="20" cy="15.3" r="1.3"/></g>
+  </symbol>
+  <!-- 20 -->
+  <symbol id="i-works" viewBox="0 0 64 64">
+    <use href="#spk" width="64" height="64"/><use href="#lap" width="64" height="64"/>
+    <path d="M26 27l4.2 4.2 8.3-8.7" fill="none" stroke="#4ADE80" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+  <!-- 21 -->
+  <symbol id="i-deg" viewBox="0 0 64 64">
+    <g stroke="#1F2350" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="32" cy="35" r="16" fill="#FFD34D"/>
+      <path d="M23 29.5l5.5-2.2M41 29.5l-5.5-2.2" stroke-width="2.4"/>
+      <path d="M25.5 44c2-2 4-2 6.5 0s4.5 2 6.5 0" fill="none" stroke-width="2.6"/>
+    </g>
+    <circle cx="26.5" cy="34.5" r="2" fill="#1F2350"/><circle cx="37.5" cy="34.5" r="2" fill="#1F2350"/>
+    <g font-family="Fredoka, sans-serif" font-weight="700" font-size="19" fill="#1F2350">
+      <text x="4" y="26" transform="rotate(-14 9 20)">?</text><text x="50" y="25" transform="rotate(14 55 19)">?</text>
+    </g>
+  </symbol>
+  <!-- 22 -->
+  <symbol id="i-goog" viewBox="0 0 64 64">
+    <rect x="4" y="22" width="54" height="18" rx="9" fill="#fff" stroke="#7FA9EA" stroke-width="3"/>
+    <g fill="none" stroke-width="3.2">
+      <path d="M9.36 28.95A6 6 0 0 1 19.24 26.76" stroke="#EA4335"/>
+      <path d="M21 31A6 6 0 0 1 19.24 35.24M15.5 31H21" stroke="#4285F4"/>
+      <path d="M19.24 35.24A6 6 0 0 1 10.76 35.24" stroke="#34A853"/>
+      <path d="M10.76 35.24A6 6 0 0 1 9.36 28.95" stroke="#FBBC05"/>
+    </g>
+    <path d="M26 31h18" stroke="#C7D2E6" stroke-width="3" stroke-linecap="round"/>
+    <path d="M45 36v16l4-3.8 3 6 3-1.5-3-5.8 5.5-.4z" fill="#fff" stroke="#1F2350" stroke-width="2.4" stroke-linejoin="round"/>
+  </symbol>
+  <!-- 23 -->
+  <symbol id="i-late" viewBox="0 0 64 64">
+    <g stroke="#1F2350" stroke-width="3" stroke-linejoin="round" stroke-linecap="round">
+      <rect x="24" y="15" width="32" height="23" rx="3.5" fill="#E9EEFB"/>
+      <rect x="28" y="19" width="24" height="15" rx="1.5" fill="#262B5A" stroke="none"/>
+      <path d="M19 41h42l-2.4 4.6a3 3 0 0 1-2.7 1.6H24.1a3 3 0 0 1-2.7-1.6z" fill="#E9EEFB"/>
+      <circle cx="15" cy="37" r="11" fill="#fff"/>
+      <path d="M15 37l-.9-7.6" stroke-width="2.2"/><path d="M15 37l-1.6-4.6" stroke-width="3"/>
+    </g>
+    <text x="40" y="29.6" text-anchor="middle" font-family="Fredoka, sans-serif" font-weight="700" font-size="9" fill="#fff">11:59</text>
+  </symbol>
+  <!-- 24 -->
+  <symbol id="i-ai-ex" viewBox="0 0 64 64">
+    <g stroke="#1F2350" stroke-width="3" stroke-linejoin="round">
+      <path d="M15 12h16a9 9 0 0 1 9 9v12a9 9 0 0 1-9 9H18l-8 6v-7.5A9 9 0 0 1 6 33V21a9 9 0 0 1 9-9z" fill="#10A37F"/>
+      <rect x="34" y="27" width="26" height="19" rx="9.5" fill="#fff"/>
+    </g>
+    <use href="#knot" x="9" y="13" width="28" height="28" color="#fff"/>
+    <g fill="#1F2350"><circle cx="41" cy="36.5" r="2"/><circle cx="47" cy="36.5" r="2"/><circle cx="53" cy="36.5" r="2"/></g>
+  </symbol>
+  <!-- 25 -->
+  <symbol id="i-party" viewBox="0 0 64 64">
+    <path d="M10 55l9-27 18 18z" fill="#F472B6"/>
+    <path d="M14.05 42.85l8.1 8.1M16.75 34.75l13.5 13.5" stroke="#FFE08A" stroke-width="3"/>
+    <path d="M10 55l9-27 18 18z" fill="none" stroke="#1F2350" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M29 22c2-3 5-3 6 0s4 3 6 0M44 33c2.5-1.5 4.5 1.5 7 0s4 1 6 0" fill="none" stroke="#7C5CE0" stroke-width="2.6" stroke-linecap="round"/>
+    <path d="M24 26l-2-6M34 35l6-2.5" stroke="#3D7DD8" stroke-width="2.6" stroke-linecap="round"/>
+    <path d="M40 3l1.8 4.2L46 9l-4.2 1.8L40 15l-1.8-4.2L34 9l4.2-1.8zM55 16l1.4 3.1 3.1 1.4-3.1 1.4L55 25l-1.4-3.1-3.1-1.4 3.1-1.4z" fill="#FBBF24" stroke="#1F2350" stroke-width="1.8" stroke-linejoin="round"/>
+    <circle cx="24" cy="12" r="2.2" fill="#34D399"/><circle cx="50" cy="44" r="2.2" fill="#F472B6"/><circle cx="58" cy="8" r="1.8" fill="#3D7DD8"/>
+  </symbol>
+</svg>
+
+<div class="wrap">
+  <header class="hero">
+    <div class="deco deco-l" aria-hidden="true">
+      <p class="note">New people<br>Same interests<br>Bigger ideas <svg><use href="#heart"/></svg></p>
+      <svg class="doodle" viewBox="0 0 64 64"><use href="#i-hack"/></svg>
+    </div>
+    <div class="deco deco-r" aria-hidden="true">
+      <p class="note">AI + Engineering<br>+ Good Vibes <svg><use href="#heart"/></svg></p>
+      <svg class="doodle" viewBox="0 0 64 64"><use href="#i-bot"/></svg>
+    </div>
+
+    <h1 class="title" aria-label="AISOC Meet and Greet Bingo">
+      <span class="t-aisoc" aria-hidden="true">AIS<svg class="o-bot" viewBox="0 0 64 64"><use href="#robo"/></svg>C</span>
+      <span class="t-mg" aria-hidden="true">Meet &amp; Greet</span>
+      <span class="t-bingo" aria-hidden="true">
+        <svg class="zap l" viewBox="0 0 20 30"><path d="M17 4L4 9M18 15H3M17 26L4 21" stroke="currentColor" stroke-width="3.4" stroke-linecap="round"/></svg>
+        <b style="--i:0;--lc:#F2558A;--ls:#C7366A;--r:-5deg">B</b><b style="--i:1;--lc:#F7A23B;--ls:#CF7C15;--r:3deg">I</b><b style="--i:2;--lc:#36BF85;--ls:#1F9466;--r:-2deg">N</b><b style="--i:3;--lc:#4D8EF0;--ls:#2F69C6;--r:4deg">G</b><b style="--i:4;--lc:#9B7BF2;--ls:#7352D2;--r:-4deg">O</b>
+        <svg class="zap r" viewBox="0 0 20 30"><path d="M17 4L4 9M18 15H3M17 26L4 21" stroke="currentColor" stroke-width="3.4" stroke-linecap="round"/></svg>
+      </span>
+    </h1>
+    <p class="find">Find someone who&hellip;</p>
+  </header>
+
+  <div class="prog" id="prog">
+    <div class="prog-n" aria-hidden="true"><b id="count">0</b><span>/25 found</span></div>
+    <div class="bar" aria-hidden="true"><i id="barFill"></i></div>
+    <div class="prog-done"><span id="doneText">BINGO! Card complete</span><button class="replay" id="replay" type="button">Replay</button></div>
+    <span class="sr" id="live" aria-live="polite"></span>
+  </div>
+  <p class="hint" id="hint">Tap a square to write in a name</p>
+
+  <main class="grid intro still" id="grid" aria-label="Bingo card"></main>
+
+  <footer class="foot">
+    <section class="rules" aria-labelledby="rulesH">
+      <h2 id="rulesH">Rules:</h2>
+      <ul>
+        <li>Find someone who matches each square and write their name.</li>
+        <li>One person can only appear once.</li>
+        <li>You have to actually talk to them first!</li>
+        <li>Whoever finds all 25 names and satisfies every statement wins!
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18h16l1-11-5 4-4-6-4 6-5-4z" fill="#FFD84D" stroke="#1F2350" stroke-width="2" stroke-linejoin="round"/></svg></li>
+      </ul>
+    </section>
+    <div class="foot-notes" aria-hidden="true">
+      <p class="note n1">Talk<br>&nbsp;Meet<br>&nbsp;&nbsp;Make new friends <svg><use href="#heart"/></svg></p>
+      <p class="note n2">Have<br>Fun! :)</p>
+    </div>
+    <div class="foot-act">
+      <button class="link-btn" id="reset" type="button" hidden>Start a new card</button>
+      <a href="https://linktr.ee/AISoc" target="_blank" rel="noopener">linktr.ee/AISoc</a>
+    </div>
+  </footer>
+</div>
+
+<div id="fx" aria-hidden="true"></div>
+<div class="toast" id="toast" aria-hidden="true"></div>
+
+<dialog class="sheet" id="sheet" aria-labelledby="sheetQ">
+  <form class="sheet-in" id="sheetForm" novalidate>
+    <span class="grab" aria-hidden="true"></span>
+    <div class="sheet-top">
+      <div class="sheet-art" aria-hidden="true">
+        <svg viewBox="0 0 64 64"><use id="sheetUse" href="#i-hack"/></svg>
+        <span class="sheet-num" id="sheetNum">1</span>
+      </div>
+      <div>
+        <p class="sheet-kick">Find someone who&hellip;</p>
+        <h2 class="sheet-q" id="sheetQ"></h2>
+      </div>
+    </div>
+    <label class="sheet-label" for="nameIn">Their name</label>
+    <input class="sheet-input" id="nameIn" type="text" maxlength="40" autocomplete="off" autocapitalize="words"
+           autocorrect="off" spellcheck="false" enterkeyhint="done" placeholder="Who did you meet?">
+    <p class="sheet-err" id="sheetErr" role="alert"></p>
+    <div class="sheet-btns">
+      <button class="btn-ghost danger" id="removeBtn" type="button">Remove</button>
+      <span class="grow"></span>
+      <button class="btn-ghost" id="cancelBtn" type="button">Cancel</button>
+      <button class="btn-main" id="saveBtn" type="submit">Got 'em!</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog class="win" id="win" aria-labelledby="winTitle">
+  <div class="rays" aria-hidden="true"></div>
+  <div class="win-card">
+    <svg class="mascot" viewBox="0 0 150 150" aria-hidden="true">
+      <g class="m-bob">
+        <g stroke="#1F2350" stroke-linecap="round" fill="none">
+          <path d="M46 104c-10 3-15 11-14 20" stroke-width="11"/>
+          <path d="M46 104c-10 3-15 11-14 20" stroke="#B9D2F7" stroke-width="5"/>
+        </g>
+        <g class="m-wave">
+          <g stroke="#1F2350" stroke-linecap="round" fill="none">
+            <path d="M96 100c12-5 19-16 20-30" stroke-width="11"/>
+            <path d="M96 100c12-5 19-16 20-30" stroke="#B9D2F7" stroke-width="5"/>
+          </g>
+          <circle cx="116" cy="64" r="8" fill="#fff" stroke="#1F2350" stroke-width="3.2"/>
+        </g>
+        <g stroke="#1F2350" stroke-width="3.2" stroke-linejoin="round">
+          <rect x="64" y="80" width="22" height="12" rx="3" fill="#A9C8F5"/>
+          <rect x="44" y="88" width="62" height="48" rx="18" fill="#fff"/>
+          <rect x="60" y="100" width="30" height="22" rx="7" fill="#EEE9FF" stroke-width="2.6"/>
+        </g>
+        <use href="#heart" x="66" y="103" width="18" height="16"/>
+        <g transform="translate(27 -4) scale(1.5)" stroke="#1F2350" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M32 14V9"/>
+          <circle cx="32" cy="6.5" r="3" fill="#8B6CF0"/>
+          <rect x="7.5" y="27" width="7" height="15" rx="3.5" fill="#A9C8F5"/>
+          <rect x="49.5" y="27" width="7" height="15" rx="3.5" fill="#A9C8F5"/>
+          <rect x="12" y="14" width="40" height="38" rx="16" fill="#fff"/>
+          <rect x="17.5" y="21" width="29" height="23" rx="10" fill="#1F2350"/>
+          <g class="m-eyes"><path d="M23.5 31.5q3-3.5 6 0M34.5 31.5q3-3.5 6 0" stroke="#8FE3FF" stroke-width="1.8" fill="none"/></g>
+          <path d="M28 36.5q4 3.5 8 0" stroke="#8FE3FF" stroke-width="1.8" fill="none"/>
+          <circle cx="21.5" cy="38" r="1.6" fill="#F472B6" stroke="none"/><circle cx="42.5" cy="38" r="1.6" fill="#F472B6" stroke="none"/>
+        </g>
+      </g>
+    </svg>
+    <h2 class="win-title" id="winTitle" aria-label="Bingo!">
+      <b style="--i:0;--lc:#F2558A;--ls:#C7366A">B</b><b style="--i:1;--lc:#F7A23B;--ls:#CF7C15">I</b><b style="--i:2;--lc:#36BF85;--ls:#1F9466">N</b><b style="--i:3;--lc:#4D8EF0;--ls:#2F69C6">G</b><b style="--i:4;--lc:#9B7BF2;--ls:#7352D2">O</b><b style="--i:5;--lc:#F2558A;--ls:#C7366A">!</b>
+    </h2>
+    <p class="win-lead">Full card! You found someone for every square.</p>
+    <p class="win-sub">25 new people met. Show this screen to someone at the AISOC stall.</p>
+    <p class="win-time" id="winTime"></p>
+    <button class="btn-main" id="winClose" type="button">See my card</button>
+  </div>
+  <canvas id="confetti" aria-hidden="true"></canvas>
+</dialog>
+
+<script>
+(() => {
+"use strict";
+
+// [prompt, icon, colour] in poster order. Prompts carry <wbr> and soft-hyphen (\u00AD) break hints
+// so long words split cleanly in a 55px-wide square.
+const SQUARES = [
+  ["Is joining the AISOC Hack\u00ADathon", "i-hack", "blue"],
+  ["Is into Robotics", "i-arm", "pink"],
+  ["Has an AI project idea", "i-idea", "green"],
+  ["Can code in Python", "i-py", "purple"],
+  ["Hates coding", "i-hate", "orange"],
+  ["Has pre\u00ADtended to under\u00ADstand a lecture", "i-note", "green"],
+  ["Has used GitHub", "i-gh", "purple"],
+  ["Is interested in Cyber\u00ADsecurity", "i-sec", "pink"],
+  ["Has used ChatGPT for coding", "i-gpt", "blue"],
+  ["Has broken their code and had no idea why", "i-broke", "orange"],
+  ["Is interested in Computer Vision", "i-cv", "purple"],
+  ["Has used MATLAB", "i-mat", "yellow"],
+  ["Can explain AI in 30 seconds", "i-30s", "green"],
+  ["Wants to work in AI/<wbr>Tech", "i-job", "pink"],
+  ["Has a folder called \u201Cfinal_<wbr>final_<wbr>FINAL\u201D", "i-final", "blue"],
+  ["Would build an AI robot", "i-bot", "yellow"],
+  ["Hates group projects", "i-group", "blue"],
+  ["Thinks robots should have person\u00ADalities", "i-pers", "purple"],
+  ["Has an un\u00ADfinished coding project", "i-wip", "pink"],
+  ["Has said \u201Cthis project works on my laptop\u201D", "i-works", "green"],
+  ["Thinks they chose the wrong degree", "i-deg", "purple"],
+  ["Has Googled an error message", "i-goog", "pink"],
+  ["Has sub\u00ADmitted an assign\u00ADment at 11:59", "i-late", "blue"],
+  ["Has used AI to explain their own code", "i-ai-ex", "yellow"],
+  ["Is excited about AISOC this year", "i-party", "purple"],
+];
+const TINTS = {
+  blue: ["#5E97F3", "#3A72DB", "#A3C4EF"], pink: ["#F36C9C", "#D93A72", "#F3AEC5"],
+  green: ["#31B880", "#17915F", "#9AD8B2"], purple: ["#9576F1", "#6F4AD9", "#BFB2F0"],
+  orange: ["#F79832", "#D9680A", "#F6C88C"], yellow: ["#F2B62A", "#CC8C06", "#F1D583"],
+};
+const PARTY = ["#F2558A", "#F7A23B", "#FFD43B", "#31B880", "#4D8EF0", "#8B6CF0", "#10A37F", "#F472B6"];
+const MILESTONES = { 1: "First one! 24 to go", 5: "5 down, keep going!", 13: "Over halfway there!", 20: "Only 5 left!", 24: "One more to go!" };
+const KEY = "aisoc-bingo-v1";
+const N = SQUARES.length;
+const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+const $ = (s) => document.querySelector(s);
+const html = document.documentElement;
+const grid = $("#grid"), sheet = $("#sheet"), form = $("#sheetForm"), input = $("#nameIn");
+const errEl = $("#sheetErr"), win = $("#win"), fx = $("#fx");
+const plain = (s) => s.replace(/<[^>]*>/g, "");
+const clean = (s) => s.replace(/\s+/g, " ").trim();
+const norm = (s) => clean(s).toLowerCase();
+const buzz = (p) => { try { navigator.vibrate && navigator.vibrate(p); } catch (e) {} };
+
+// ---------- state ----------
+function load() {
+  try {
+    const s = JSON.parse(localStorage.getItem(KEY));
+    if (s && Array.isArray(s.names) && s.names.length === N) {
+      return { names: s.names.map(n => typeof n === "string" ? clean(n).slice(0, 40) : ""),
+               done: typeof s.done === "number" ? s.done : null };
+    }
+  } catch (e) {}
+  return { names: Array(N).fill(""), done: null };
+}
+function store() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} }
+let state = load();
+const found = () => state.names.filter(Boolean).length;
+
+function when(ts) {
+  const d = new Date(ts);
+  const t = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return d.toDateString() === new Date().toDateString() ? t : d.toLocaleDateString([], { day: "numeric", month: "short" }) + ", " + t;
+}
+
+// ---------- build the card ----------
+const cells = SQUARES.map(([q, icon, tint], i) => {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "cell t-" + tint;
+  b.dataset.i = i;
+  b.style.setProperty("--n", i);
+  b.style.setProperty("--rot", (i % 2 ? 3 : -3) + "deg");
+  b.innerHTML =
+    `<span class="box"><span class="ink"></span>` +
+    `<span class="num" aria-hidden="true"><i class="f">${i + 1}</i><i class="b"><svg viewBox="0 0 24 24"><path d="M5.5 12.5l4 4 9-9.5"/></svg></i></span>` +
+    `<span class="q" aria-hidden="true">${q}</span>` +
+    `<span class="slot" aria-hidden="true"><svg class="art" viewBox="0 0 64 64"><use href="#${icon}"/></svg>` +
+    `<span class="who"><span class="name"></span></span></span></span>`;
+  grid.appendChild(b);
+  return b;
+});
+
+// Shrink a name until it fits its square: one long word must not spill out.
+function fit(c) {
+  const who = c.querySelector(".who"), nm = c.querySelector(".name");
+  const w = who.clientWidth, h = who.clientHeight;
+  if (!w || !h) return;
+  let size = Math.min(h * 0.86, w * 0.36, 40);
+  nm.style.fontSize = size + "px";
+  while (size > 9 && (nm.scrollWidth > nm.clientWidth + 0.5 || nm.offsetHeight > h + 0.5)) {
+    size -= 0.5;
+    nm.style.fontSize = size + "px";
+  }
+}
+function refit() { cells.forEach(c => { if (c.classList.contains("filled")) fit(c); }); }
+
+function paint(i) {
+  const c = cells[i], name = state.names[i];
+  if (name) c.querySelector(".name").textContent = name;
+  c.classList.toggle("filled", !!name);
+  c.setAttribute("aria-label", `${i + 1}. ${plain(SQUARES[i][0])}. ${name ? "Found: " + name : "Not found yet"}`);
+  if (name) fit(c);
+}
+
+function progress(bumped) {
+  const n = found();
+  $("#count").textContent = n;
+  $("#barFill").style.setProperty("--p", n / N);
+  $("#prog").classList.toggle("done", n === N && !!state.done);
+  if (state.done) $("#doneText").textContent = "BINGO! Finished " + when(state.done);
+  $("#hint").hidden = n > 0;
+  $("#reset").hidden = n === 0;
+  if (bumped) {
+    const b = $("#count");
+    b.classList.remove("bump"); void b.offsetWidth; b.classList.add("bump");
+  }
+}
+
+cells.forEach((_, i) => paint(i));
+progress();
+requestAnimationFrame(() => requestAnimationFrame(() => grid.classList.remove("still")));
+setTimeout(() => grid.classList.remove("intro"), 1600);
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(refit);
+let fitQueued = false;
+new ResizeObserver(() => {
+  if (fitQueued) return;
+  fitQueued = true;
+  requestAnimationFrame(() => { fitQueued = false; refit(); });
+}).observe(grid);
+
+// ---------- effects ----------
+function burst(x, y, colors, spread) {
+  if (reduced) return;
+  const ring = document.createElement("i");
+  ring.className = "ring";
+  const d = spread * 1.5;
+  ring.style.cssText = `left:${x}px;top:${y}px;width:${d}px;height:${d}px;--c:${colors[1]}`;
+  fx.appendChild(ring);
+  ring.animate([{ transform: "translate(-50%,-50%) scale(.25)", opacity: 0.9 },
+                { transform: "translate(-50%,-50%) scale(1)", opacity: 0 }],
+               { duration: 620, easing: "cubic-bezier(.2,.7,.3,1)" }).onfinish = () => ring.remove();
+  const kinds = ["dot", "star", "bar2"], count = 16;
+  for (let k = 0; k < count; k++) {
+    const p = document.createElement("i"), kind = kinds[k % 3];
+    const a = (k / count) * Math.PI * 2 + Math.random() * 0.4;
+    const dist = spread * (0.6 + Math.random() * 0.55);
+    const dx = Math.cos(a) * dist, dy = Math.sin(a) * dist;
+    const s = 5 + Math.random() * 6, spin = (Math.random() - 0.5) * 600;
+    p.className = kind;
+    p.style.cssText = `left:${x}px;top:${y}px;width:${s * (kind === "bar2" ? 1.6 : 1)}px;height:${s * (kind === "bar2" ? 0.5 : 1)}px;` +
+                      `background:${k % 4 === 3 ? PARTY[k % PARTY.length] : colors[k % 2]}`;
+    fx.appendChild(p);
+    p.animate([
+      { transform: "translate(-50%,-50%) scale(.4)", opacity: 1 },
+      { transform: `translate(-50%,-50%) translate(${dx}px,${dy}px) rotate(${spin}deg) scale(1)`, opacity: 1, offset: 0.55 },
+      { transform: `translate(-50%,-50%) translate(${dx * 1.12}px,${dy * 1.12 + 16}px) rotate(${spin * 1.4}deg) scale(.2)`, opacity: 0 },
+    ], { duration: 700 + Math.random() * 300, easing: "cubic-bezier(.15,.75,.35,1)" }).onfinish = () => p.remove();
+  }
+}
+
+function celebrateCell(i) {
+  const c = cells[i];
+  c.classList.remove("popping"); void c.offsetWidth; c.classList.add("popping");
+  setTimeout(() => c.classList.remove("popping"), 700);
+  const r = c.getBoundingClientRect();
+  burst(r.left + r.width / 2, r.top + r.height / 2, TINTS[SQUARES[i][2]], Math.max(r.width, 64));
+  buzz(14);
+}
+
+let toastT;
+function toast(msg) {
+  const t = $("#toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(toastT);
+  toastT = setTimeout(() => t.classList.remove("show"), 2300);
+}
+const say = (msg) => { $("#live").textContent = msg; };
+
+// ---------- the name sheet ----------
+let cur = -1, byPointer = false;
+
+// The keyboard covers the bottom of the screen without resizing the page on
+// iOS; lift the sheet by however much of the layout viewport is hidden.
+const vv = window.visualViewport;
+function liftSheet() {
+  if (!vv) return;
+  const hidden = Math.max(0, innerHeight - vv.height - vv.offsetTop);
+  sheet.style.setProperty("--kb", hidden + "px");
+}
+if (vv) { vv.addEventListener("resize", liftSheet); vv.addEventListener("scroll", liftSheet); }
+
+function err(msg) {
+  errEl.textContent = msg;
+  if (msg) { input.classList.remove("shake"); void input.offsetWidth; input.classList.add("shake"); }
+}
+
+function openSheet(i) {
+  cur = i;
+  const [q, icon, tint] = SQUARES[i], name = state.names[i];
+  sheet.className = "sheet t-" + tint;
+  $("#sheetUse").setAttribute("href", "#" + icon);
+  $("#sheetNum").textContent = i + 1;
+  $("#sheetQ").innerHTML = q;
+  input.value = name;
+  $("#removeBtn").hidden = !name;
+  $("#saveBtn").textContent = name ? "Update" : "Got 'em!";
+  err("");
+  sheet.showModal();
+  html.classList.add("modal");
+  liftSheet();
+  input.focus();
+  if (name) input.select();
+}
+
+function closeSheet(after) {
+  if (!sheet.open || sheet.classList.contains("closing")) return;
+  sheet.classList.add("closing");
+  input.blur();
+  setTimeout(() => {
+    sheet.classList.remove("closing");
+    sheet.close();
+    // close() hands focus back to the square; keep its ring for keyboard users only
+    if (byPointer && document.activeElement) document.activeElement.blur();
+    html.classList.remove("modal");
+    if (after) after();
+  }, reduced ? 0 : 190);
+}
+
+function save() {
+  const name = clean(input.value);
+  if (!name) { err("Write their name first!"); input.focus(); return; }
+  const dup = state.names.findIndex((n, j) => j !== cur && n && norm(n) === norm(name));
+  if (dup >= 0) {
+    err(`${state.names[dup]} is already on your card for \u201C${plain(SQUARES[dup][0])}\u201D. One person per square!` +
+        (name.includes(" ") ? "" : ` A different ${name}? Add their surname.`));
+    input.focus();
+    return;
+  }
+  const i = cur, had = state.names[i];
+  if (had === name) { closeSheet(); return; }
+  state.names[i] = name;
+  store();
+  closeSheet(() => {
+    const c = cells[i];
+    paint(i);
+    if (had) {                                // renamed: just rewrite the name
+      c.classList.remove("rewrite"); void c.offsetWidth; c.classList.add("rewrite");
+      say(`Square ${i + 1} updated: ${name}`);
+      return;
+    }
+    celebrateCell(i);
+    const n = found();
+    progress(true);
+    say(`${name} added. ${n} of ${N} found.`);
+    if (n === N && !state.done) {
+      state.done = Date.now();
+      store();
+      setTimeout(() => fullHouse(i), reduced ? 200 : 650);
+    } else if (MILESTONES[n]) {
+      setTimeout(() => toast(MILESTONES[n]), 450);
+    }
+  });
+}
+
+function removeName() {
+  const i = cur;
+  state.names[i] = "";
+  state.done = null;
+  store();
+  closeSheet(() => {
+    const c = cells[i], r = c.getBoundingClientRect();
+    c.style.setProperty("--x", r.width / 2 + "px");
+    c.style.setProperty("--y", r.height / 2 + "px");
+    paint(i);
+    progress(true);
+    say(`Square ${i + 1} cleared. ${found()} of ${N} found.`);
+  });
+}
+
+grid.addEventListener("click", (e) => {
+  const c = e.target.closest(".cell");
+  if (!c) return;
+  // the ink floods out from the tap; keyboard presses (detail 0) start in the middle
+  const r = c.getBoundingClientRect();
+  byPointer = e.detail > 0;
+  c.style.setProperty("--x", (byPointer ? e.clientX - r.left : r.width / 2) + "px");
+  c.style.setProperty("--y", (byPointer ? e.clientY - r.top : r.height / 2) + "px");
+  openSheet(+c.dataset.i);
+});
+form.addEventListener("submit", (e) => { e.preventDefault(); save(); });
+input.addEventListener("input", () => { if (errEl.textContent) errEl.textContent = ""; });
+$("#cancelBtn").addEventListener("click", () => closeSheet());
+$("#removeBtn").addEventListener("click", removeName);
+sheet.addEventListener("cancel", (e) => { e.preventDefault(); closeSheet(); });
+// Chrome force-closes a dialog on a second quick Esc without asking; never leave the page scroll-locked
+sheet.addEventListener("close", () => { sheet.classList.remove("closing"); html.classList.remove("modal"); });
+sheet.addEventListener("click", (e) => { if (e.target === sheet) closeSheet(); });
+
+// ---------- start over ----------
+const resetBtn = $("#reset");
+let armT;
+function disarm() { clearTimeout(armT); resetBtn.classList.remove("armed"); resetBtn.textContent = "Start a new card"; }
+resetBtn.addEventListener("click", () => {
+  if (!resetBtn.classList.contains("armed")) {
+    resetBtn.classList.add("armed");
+    resetBtn.textContent = "Tap again to clear every name";
+    armT = setTimeout(disarm, 3500);
+    return;
+  }
+  disarm();
+  const had = state.names.map((n, i) => n ? i : -1).filter(i => i >= 0);
+  state = { names: Array(N).fill(""), done: null };
+  store();
+  had.forEach((i, k) => setTimeout(() => {
+    cells[i].style.setProperty("--x", "50%");
+    cells[i].style.setProperty("--y", "50%");
+    paint(i);
+  }, reduced ? 0 : k * 35));
+  progress();
+  say("Card cleared.");
+  scrollTo({ top: 0, behavior: reduced ? "auto" : "smooth" });
+});
+
+// ---------- full house ----------
+function fullHouse(last) {
+  if (!reduced) {
+    const r0 = Math.floor(last / 5), c0 = last % 5;
+    cells.forEach((c, i) => {
+      const d = Math.abs(Math.floor(i / 5) - r0) + Math.abs(i % 5 - c0);
+      c.style.setProperty("--d", d * 70 + "ms");
+      c.classList.remove("popping", "wave"); void c.offsetWidth; c.classList.add("wave");
+    });
+    setTimeout(() => cells.forEach(c => c.classList.remove("wave")), 8 * 70 + 700);
+  }
+  progress();
+  setTimeout(showWin, reduced ? 0 : 1150);
+}
+
+function showWin() {
+  $("#winTime").textContent = "Finished at " + when(state.done || Date.now());
+  win.classList.remove("out", "play");
+  win.showModal();
+  html.classList.add("modal");
+  void win.offsetWidth;
+  win.classList.add("play");
+  $("#winClose").focus({ preventScroll: true });
+  buzz([30, 50, 30, 50, 80]);
+  if (reduced) return;
+  sizeCanvas();
+  const W = innerWidth, H = innerHeight, v = Math.sqrt(H) * 0.95;
+  setTimeout(() => { spray(0, H, -62, 34, v, 70); spray(W, H, -118, 34, v, 70); }, 250);
+  setTimeout(() => spray(W / 2, H * 0.32, -90, 360, 11, 60), 700);
+  rain(3200);
+}
+
+function hideWin() {
+  if (!win.open || win.classList.contains("out")) return;
+  win.classList.add("out");
+  setTimeout(() => win.close(), reduced ? 0 : 250);
+}
+$("#winClose").addEventListener("click", hideWin);
+win.addEventListener("cancel", (e) => { e.preventDefault(); hideWin(); });
+win.addEventListener("close", () => {
+  win.classList.remove("out", "play");
+  html.classList.remove("modal");
+  bits = []; rainUntil = 0;                         // nothing left falling behind a closed dialog
+  ctx.clearRect(0, 0, cw, ch);
+});
+win.addEventListener("pointerdown", (e) => {        // tap anywhere for more confetti
+  if (reduced || e.target.closest("button")) return;
+  spray(e.clientX, e.clientY, -90, 360, 9, 28);
+});
+$("#replay").addEventListener("click", showWin);
+
+// ---------- confetti (canvas, so hundreds of pieces stay smooth on a phone) ----------
+const cv = $("#confetti"), ctx = cv.getContext("2d");
+let bits = [], raf = 0, last = 0, rainUntil = 0, cw = 0, ch = 0;
+function sizeCanvas() {
+  const d = Math.min(devicePixelRatio || 1, 2);
+  cw = innerWidth; ch = innerHeight;
+  cv.width = cw * d; cv.height = ch * d;
+  ctx.setTransform(d, 0, 0, d, 0, 0);
+}
+addEventListener("resize", () => { if (win.open) sizeCanvas(); });
+
+const SHAPES = ["rect", "rect", "circle", "ribbon", "star"];
+function spray(x, y, angle, spread, speed, count) {
+  for (let k = 0; k < count; k++) {
+    const a = (angle + (Math.random() - 0.5) * spread) * Math.PI / 180;
+    const v = speed * (0.55 + Math.random() * 0.6);
+    bits.push({
+      x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v,
+      s: 5 + Math.random() * 6, r: Math.random() * 6.3, vr: (Math.random() - 0.5) * 0.3,
+      f: Math.random() * 6.3, vf: 0.07 + Math.random() * 0.12,
+      c: PARTY[(Math.random() * PARTY.length) | 0], k: SHAPES[(Math.random() * SHAPES.length) | 0],
+      t: 0, life: 170 + Math.random() * 110,
+    });
+  }
+  if (!raf) { last = performance.now(); raf = requestAnimationFrame(tick); }
+}
+function rain(ms) {
+  rainUntil = performance.now() + ms;
+  if (!raf) { last = performance.now(); raf = requestAnimationFrame(tick); }
+}
+function star(s) {
+  ctx.beginPath();
+  for (let k = 0; k < 10; k++) {
+    const rr = k % 2 ? s * 0.42 : s, a = k * Math.PI / 5 - Math.PI / 2;
+    ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
+  }
+  ctx.closePath();
+  ctx.fill();
+}
+function tick(now) {
+  const dt = Math.min(2.5, (now - last) / 16.67);
+  last = now;
+  if (now < rainUntil && Math.random() < 0.5 * dt) {
+    for (let k = 0; k < 3; k++) spray(Math.random() * cw, -12, 90, 40, 2, 1);
+    bits[bits.length - 1].life = 400; bits[bits.length - 2].life = 400; bits[bits.length - 3].life = 400;
+  }
+  ctx.clearRect(0, 0, cw, ch);
+  bits = bits.filter(p => p.t < p.life && p.y < ch + 30);
+  const drag = Math.pow(0.986, dt);
+  for (const p of bits) {
+    p.t += dt;
+    p.vx *= drag;
+    p.vy = Math.min(p.vy * drag + 0.3 * dt, 3.2 + p.s * 0.12);   // paper falls slowly
+    p.x += (p.vx + Math.sin(p.f) * 0.7) * dt;
+    p.y += p.vy * dt;
+    p.r += p.vr * dt;
+    p.f += p.vf * dt;
+    ctx.globalAlpha = Math.max(0, Math.min(1, (p.life - p.t) / 30));
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.rotate(p.r);
+    ctx.scale(1, Math.cos(p.f));           // the flutter: pieces flip as they fall
+    ctx.fillStyle = p.c;
+    if (p.k === "rect") ctx.fillRect(-p.s / 2, -p.s * 0.35, p.s, p.s * 0.7);
+    else if (p.k === "ribbon") ctx.fillRect(-p.s * 0.18, -p.s, p.s * 0.36, p.s * 2);
+    else if (p.k === "circle") { ctx.beginPath(); ctx.arc(0, 0, p.s * 0.42, 0, 6.3); ctx.fill(); }
+    else star(p.s * 0.62);
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+  raf = (bits.length || now < rainUntil) ? requestAnimationFrame(tick) : 0;
+}
+})();
+</script>
+</body>
+</html>

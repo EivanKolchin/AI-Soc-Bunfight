@@ -123,6 +123,7 @@ echo     STALL SHELL .... http://localhost:%PORT%/
 echo   --------------------------------------------------
 echo     Mood detector .. http://localhost:%PORT%/demos/mood.html
 echo     Air pictionary . http://localhost:%PORT%/demos/pictionary.html
+echo     Bingo card ..... http://localhost:%PORT%/bingo/
 echo.
 echo     Browser check .. http://localhost:%PORT%/shared/delegate-test.html
 echo     Tongue test .... http://localhost:%PORT%/shared/tongue-test.html

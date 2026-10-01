@@ -10,6 +10,8 @@ bunfight/
   index.html          shell + demo switching (open this one)
   demos/mood.html     the mood detector
   demos/pictionary.html air pictionary
+  bingo/index.html    Meet & Greet bingo card for phones, served at /bingo
+  bingo/fonts/        its fonts (Fredoka, Patrick Hand, Caveat - all OFL)
   media/mood/         drop .webm clips here for the punchline panel
   media/aisoc-qr.svg  QR card for linktr.ee/AISoc (built by tools/make-qr.mjs)
   media/aisoc-logo.png society logo, recoloured purple, in the middle of the QR
@@ -69,6 +71,26 @@ edit `LINK` in `tools/make-qr.mjs` or replace `media/aisoc-logo.png`, then:
 npm install --prefix tools qrcode
 node tools/make-qr.mjs
 ```
+
+## Meet & Greet bingo (/bingo)
+
+The poster as a page people open on their own phones: tap a square, write the
+name of whoever matches it, and the square floods with colour. Fill all 25 and
+the card celebrates. It is one self-contained file with no camera and no
+modules, so it also works opened straight from the folder.
+
+- Progress is kept in the phone's own browser (localStorage), so a reload or a
+  tab the phone threw away keeps the card. Nothing is sent anywhere.
+- One person per card: a name already used on another square is refused
+  (case and spacing ignored), with a nudge to add a surname for a second Sam.
+- The finish time is recorded and shown on the completed card, which helps if
+  the prize goes to whoever finishes first. Replay re-runs the celebration;
+  "Start a new card" (tap twice) clears it.
+- To change a prompt or its icon, edit `SQUARES` near the top of the script.
+  The icons are inline SVG symbols (`i-...`) in the same file.
+- Fredoka is a static cut with one edited glyph: its bold B has a single open
+  counter, which looked odd at the front of BINGO, so the middle bar was joined
+  to the stem.
 
 ## Mood detector
 
