@@ -71,15 +71,11 @@ button { font:inherit; color:inherit; background:none; border:0; cursor:pointer;
 .t-yellow { --soft:#FEF6DA; --line:#F1D583; --badge:#EE8320; --c1:#F2B62A; --c2:#CC8C06; }
 
 /* ---------- header ---------- */
-.hero { text-align:center; padding-top:calc(18px + env(safe-area-inset-top)); position:relative; }
+.hero { text-align:center; padding-top:calc(26px + env(safe-area-inset-top)); position:relative; }
 .title { font-family:var(--display); font-weight:700; line-height:.92; letter-spacing:-.015em; }
 .title > span { display:block; }
-.t-aisoc { font-size:clamp(44px, 12.5vw, 98px); }
-.o-bot { display:inline-block; width:1.06em; height:1.06em; vertical-align:-.2em; margin:0 -.07em 0 -.05em;
-         transform-origin:50% 80%; animation:botNod 4.5s ease-in-out 1.2s infinite; }
-.t-mg { font-size:clamp(31px, 9.2vw, 70px); margin-top:.04em; }
 .t-bingo { font-size:clamp(66px, 19.5vw, 142px); display:flex; justify-content:center; align-items:center;
-           gap:.015em; margin-top:.02em; line-height:1; }
+           gap:.015em; line-height:1; }
 .t-bingo b { display:inline-block; font-weight:700; color:var(--lc); text-shadow:0 .05em 0 var(--ls);
              animation:letterIn .75s var(--spring) calc(.15s + var(--i) * .08s) both; }
 .zap { width:.34em; height:.5em; flex:none; color:var(--navy); }
@@ -317,7 +313,6 @@ dialog { border:0; padding:0; background:transparent; color:inherit; max-width:n
 @keyframes fadeUp { from { opacity:0; transform:translateY(10px); } }
 @keyframes fadeIn { from { opacity:0; } }
 @keyframes fadeOut { to { opacity:0; } }
-@keyframes botNod { 0%, 84%, 100% { transform:rotate(0); } 88% { transform:rotate(-12deg); } 93% { transform:rotate(9deg); } 97% { transform:rotate(-3deg); } }
 @keyframes float { 50% { transform:rotate(4deg) translateY(-8px); } }
 @keyframes bump { 40% { transform:scale(1.45); color:#D93A72; } }
 @keyframes cellIn { from { opacity:0; transform:translateY(14px) scale(.85); } }
@@ -632,8 +627,6 @@ dialog { border:0; padding:0; background:transparent; color:inherit; max-width:n
     </div>
 
     <h1 class="title" aria-label="AISOC Meet and Greet Bingo">
-      <span class="t-aisoc" aria-hidden="true">AIS<svg class="o-bot" viewBox="0 0 64 64"><use href="#robo"/></svg>C</span>
-      <span class="t-mg" aria-hidden="true">Meet &amp; Greet</span>
       <span class="t-bingo" aria-hidden="true">
         <svg class="zap l" viewBox="0 0 20 30"><path d="M17 4L4 9M18 15H3M17 26L4 21" stroke="currentColor" stroke-width="3.4" stroke-linecap="round"/></svg>
         <b style="--i:0;--lc:#F2558A;--ls:#C7366A;--r:-5deg">B</b><b style="--i:1;--lc:#F7A23B;--ls:#CF7C15;--r:3deg">I</b><b style="--i:2;--lc:#36BF85;--ls:#1F9466;--r:-2deg">N</b><b style="--i:3;--lc:#4D8EF0;--ls:#2F69C6;--r:4deg">G</b><b style="--i:4;--lc:#9B7BF2;--ls:#7352D2;--r:-4deg">O</b>
@@ -757,12 +750,12 @@ dialog { border:0; padding:0; background:transparent; color:inherit; max-width:n
 // [prompt, icon, colour] in poster order. Prompts carry <wbr> and soft-hyphen (\u00AD) break hints
 // so long words split cleanly in a 55px-wide square.
 const SQUARES = [
-  ["Is joining the AISOC Hack\u00ADathon", "i-hack", "blue"],
+  ["Is joining the AISOC Hackathon", "i-hack", "blue"],
   ["Is into Robotics", "i-arm", "pink"],
   ["Has an AI project idea", "i-idea", "green"],
   ["Can code in Python", "i-py", "purple"],
   ["Hates coding", "i-hate", "orange"],
-  ["Has pre\u00ADtended to under\u00ADstand a lecture", "i-note", "green"],
+  ["Has pretended to understand a lecture", "i-note", "green"],
   ["Has used GitHub", "i-gh", "purple"],
   ["Is interested in Cyber\u00ADsecurity", "i-sec", "pink"],
   ["Has used ChatGPT for coding", "i-gpt", "blue"],
@@ -775,11 +768,11 @@ const SQUARES = [
   ["Would build an AI robot", "i-bot", "yellow"],
   ["Hates group projects", "i-group", "blue"],
   ["Thinks robots should have person\u00ADalities", "i-pers", "purple"],
-  ["Has an un\u00ADfinished coding project", "i-wip", "pink"],
+  ["Has an unfinished coding project", "i-wip", "pink"],
   ["Has said \u201Cthis project works on my laptop\u201D", "i-works", "green"],
   ["Thinks they chose the wrong degree", "i-deg", "purple"],
   ["Has Googled an error message", "i-goog", "pink"],
-  ["Has sub\u00ADmitted an assign\u00ADment at 11:59", "i-late", "blue"],
+  ["Has submitted an assignment at 11:59", "i-late", "blue"],
   ["Has used AI to explain their own code", "i-ai-ex", "yellow"],
   ["Is excited about AISOC this year", "i-party", "purple"],
 ];
